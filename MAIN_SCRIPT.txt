@@ -1,0 +1,1366 @@
+import json
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+
+
+@dataclass
+class CamKinematics:
+    angle_deg: List[float]
+    lift: List[float]
+    velocity: List[float]
+    acceleration: List[float]
+    radius_of_curvature: List[float]
+    entraining_velocity: List[float]
+    sliding_velocity: List[float]
+    contact_load: List[float]
+    hertz_half_width: List[float]
+    hertz_pressure: List[float]
+
+
+@dataclass
+class EHLSolution:
+    film_centre: float
+    film_minimum: float
+    hydrodynamic_load: float
+    asperity_load: float
+    hydrodynamic_friction: float
+    asperity_friction: float
+    x: List[float]
+    pressure: List[float]
+    film_profile: List[float]
+
+
+def linspace(start: float, stop: float, num: int) -> List[float]:
+    if num < 2:
+        return [start]
+    step = (stop - start) / (num - 1)
+    return [start + i * step for i in range(num)]
+
+
+def gradient(values: List[float], axis: List[float]) -> List[float]:
+    n = len(values)
+    grads = [0.0] * n
+    if n == 1:
+        return grads
+    for i in range(n):
+        if i == 0:
+            dx = axis[1] - axis[0]
+            grads[i] = (values[1] - values[0]) / dx
+        elif i == n - 1:
+            dx = axis[-1] - axis[-2]
+            grads[i] = (values[-1] - values[-2]) / dx
+        else:
+            dx = axis[i + 1] - axis[i - 1]
+            grads[i] = (values[i + 1] - values[i - 1]) / dx
+    return grads
+
+
+def trapz(y: List[float], x: List[float]) -> float:
+    total = 0.0
+    for i in range(len(x) - 1):
+        dx = x[i + 1] - x[i]
+        total += 0.5 * (y[i] + y[i + 1]) * dx
+    return total
+
+
+def max_abs_diff(a: List[float], b: List[float]) -> float:
+    return max((abs(ai - bi) for ai, bi in zip(a, b)), default=0.0)
+
+
+def zeros_like(reference: List[float], value: float = 0.0) -> List[float]:
+    return [value for _ in reference]
+
+
+def compute_kinematics(
+    angle_deg: List[float],
+    lift: List[float],
+    rpm: float,
+    mass_eq: float,
+    spring_k: float,
+    spring_preload: float,
+    base_radius: float,
+    contact_length: float,
+    e_prime: float,
+) -> CamKinematics:
+    theta_rad = [math.radians(a) for a in angle_deg]
+    omega = rpm * 2.0 * math.pi / 60.0
+
+    dy_dtheta = gradient(lift, theta_rad)
+    d2y_dtheta2 = gradient(dy_dtheta, theta_rad)
+
+    velocity = [d * omega for d in dy_dtheta]
+    acceleration = [d * (omega**2) for d in d2y_dtheta2]
+
+    radius_of_curvature: List[float] = []
+    entraining_velocity: List[float] = []
+    sliding_velocity: List[float] = []
+    contact_load: List[float] = []
+    hertz_half_width: List[float] = []
+    hertz_pressure: List[float] = []
+
+    for idx, disp in enumerate(lift):
+        dy = dy_dtheta[idx]
+        d2y = d2y_dtheta2[idx]
+        base = base_radius + disp
+        numerator = ((base) ** 2 + dy**2) ** 1.5
+        denominator = base + d2y
+        if denominator != 0.0:
+            radius = abs(numerator / denominator)
+        else:
+            radius = float("inf")
+        radius_of_curvature.append(radius)
+
+        cam_surface_speed = omega * base
+        entraining_velocity.append(0.5 * cam_surface_speed)
+        sliding_velocity.append(cam_surface_speed)
+
+        load = mass_eq * acceleration[idx] + spring_k * (disp + spring_preload)
+        if load < 0.0:
+            load = 0.0
+        contact_load.append(load)
+
+        if contact_length > 0.0 and radius > 0.0 and math.isfinite(radius):
+            load_per_length = load / contact_length
+            inside = 4.0 * load_per_length * radius / (math.pi * e_prime)
+            if inside < 0.0:
+                inside = 0.0
+            half_width = math.sqrt(inside)
+        else:
+            half_width = 0.0
+        hertz_half_width.append(half_width)
+
+        if half_width > 0.0 and contact_length > 0.0:
+            pressure = load / (math.pi * contact_length * half_width)
+        else:
+            pressure = 0.0
+        hertz_pressure.append(pressure)
+
+    return CamKinematics(
+        angle_deg=angle_deg,
+        lift=lift,
+        velocity=velocity,
+        acceleration=acceleration,
+        radius_of_curvature=radius_of_curvature,
+        entraining_velocity=entraining_velocity,
+        sliding_velocity=sliding_velocity,
+        contact_load=contact_load,
+        hertz_half_width=hertz_half_width,
+        hertz_pressure=hertz_pressure,
+    )
+
+
+def solve_reynolds(
+    film: List[float],
+    eta: float,
+    entraining_velocity: float,
+    dx: float,
+    max_iter: int = 120,
+    tol: float = 1e-5,
+    relaxation: float = 1.1,
+) -> List[float]:
+    n = len(film)
+    pressure = [0.0 for _ in film]
+    rhs_coeff = 6.0 * eta * entraining_velocity
+
+    for _ in range(max_iter):
+        max_change = 0.0
+        for i in range(1, n - 1):
+            h_im12 = 0.5 * (film[i] + film[i - 1])
+            h_ip12 = 0.5 * (film[i] + film[i + 1])
+            a = (h_im12**3) / (dx**2)
+            c = (h_ip12**3) / (dx**2)
+            b = -(a + c)
+            rhs = rhs_coeff * (film[i + 1] - film[i - 1]) / (2.0 * dx)
+            if b == 0.0:
+                continue
+            p_new = (rhs - a * pressure[i - 1] - c * pressure[i + 1]) / b
+            if p_new < 0.0:
+                p_new = 0.0
+            change = p_new - pressure[i]
+            pressure[i] += relaxation * change
+            if abs(change) > max_change:
+                max_change = abs(change)
+        if max_change < tol:
+            break
+    pressure[0] = 0.0
+    pressure[-1] = 0.0
+    pressure = [p if p > 0.0 else 0.0 for p in pressure]
+    return pressure
+
+
+def compute_surface_deflection(pressure: List[float], dx: float, e_prime: float) -> List[float]:
+    n = len(pressure)
+    x_positions = [i * dx for i in range(n)]
+    prefactor = 2.0 / (math.pi * e_prime)
+    deformation = [0.0 for _ in pressure]
+    for i in range(n):
+        xi = x_positions[i]
+        total = 0.0
+        for j in range(n):
+            distance = abs(xi - x_positions[j]) + dx / 2.0
+            total += pressure[j] * math.log(distance)
+        deformation[i] = prefactor * total * dx
+    average = sum(deformation) / n if n > 0 else 0.0
+    deformation = [d - average for d in deformation]
+    return deformation
+
+
+def asperity_pressure(
+    film: List[float],
+    sigma: float,
+    beta: float,
+    eta_r: float,
+    e_prime: float,
+) -> List[float]:
+    if sigma <= 0.0:
+        return [0.0 for _ in film]
+    sqrt_beta = math.sqrt(max(beta, 1e-20))
+    prefactor = (4.0 / 3.0) * e_prime * sqrt_beta * (sigma ** 1.5) * eta_r
+    pressures: List[float] = []
+    for h in film:
+        s = h / sigma
+        upper = s + 10.0
+        steps = 30
+        dz = (upper - s) / steps
+        total = 0.0
+        for k in range(steps + 1):
+            z = s + k * dz
+            weight = 1.0
+            if k == 0 or k == steps:
+                weight = 0.5
+            value = (max(z - s, 0.0) ** 1.5) * math.exp(-0.5 * z * z)
+            total += weight * value
+        integral = total * dz / math.sqrt(2.0 * math.pi)
+        pressures.append(prefactor * max(integral, 0.0))
+    return pressures
+
+
+def solve_ehl(
+    radius: float,
+    entraining_velocity: float,
+    sliding_velocity: float,
+    load: float,
+    contact_length: float,
+    eta: float,
+    e_prime: float,
+    sigma: float,
+    beta: float,
+    eta_r: float,
+    shear_coeff: float,
+) -> EHLSolution:
+    if load <= 0.0 or not math.isfinite(radius) or radius <= 0.0:
+        x = linspace(-1e-4, 1e-4, 101)
+        film = [1e-7 for _ in x]
+        pressure = [0.0 for _ in x]
+        return EHLSolution(
+            film_centre=film[len(film) // 2],
+            film_minimum=min(film),
+            hydrodynamic_load=0.0,
+            asperity_load=0.0,
+            hydrodynamic_friction=0.0,
+            asperity_friction=0.0,
+            x=x,
+            pressure=pressure,
+            film_profile=film,
+        )
+
+    half_width_hertz = math.sqrt(
+        max(4.0 * load * radius / (math.pi * contact_length * e_prime), 1e-24)
+    )
+    domain_half = 5.0 * half_width_hertz if half_width_hertz > 0.0 else 1e-4
+    nodes = 101
+    x = linspace(-domain_half, domain_half, nodes)
+    dx = x[1] - x[0]
+    geometry = [xi * xi / (2.0 * radius) for xi in x]
+
+    def evaluate(h0: float) -> Tuple[float, List[float], List[float]]:
+        deformation = [0.0 for _ in x]
+        pressure = [0.0 for _ in x]
+        for _ in range(12):
+            film = [max(h0 + g + d, 1e-9) for g, d in zip(geometry, deformation)]
+            pressure = solve_reynolds(film, eta, entraining_velocity, dx)
+            new_deformation = compute_surface_deflection(pressure, dx, e_prime)
+            if max_abs_diff(new_deformation, deformation) < 1e-9:
+                deformation = new_deformation
+                break
+            deformation = [0.5 * (di + ni) for di, ni in zip(deformation, new_deformation)]
+        film = [max(h0 + g + d, 1e-9) for g, d in zip(geometry, deformation)]
+        asperity_p = asperity_pressure(film, sigma, beta, eta_r, e_prime)
+        hyd_load = trapz(pressure, x) * contact_length
+        asp_load = trapz(asperity_p, x) * contact_length
+        total = hyd_load + asp_load
+        return total, pressure, film
+
+    target = load
+    h0_lower = 5e-9
+    h0_upper = 5e-6
+    load_lower, p_lower, h_lower = evaluate(h0_lower)
+    load_upper, p_upper, h_upper = evaluate(h0_upper)
+
+    if (load_lower - target) * (load_upper - target) > 0.0:
+        for _ in range(6):
+            if load_lower > target:
+                h0_upper *= 2.0
+                load_upper, p_upper, h_upper = evaluate(h0_upper)
+            else:
+                h0_lower *= 0.5
+                load_lower, p_lower, h_lower = evaluate(h0_lower)
+            if (load_lower - target) * (load_upper - target) <= 0.0:
+                break
+
+    h_star = h0_upper
+    p_star = p_upper
+    h_profile = h_upper
+
+    for _ in range(30):
+        h0_mid = 0.5 * (h0_lower + h0_upper)
+        load_mid, p_mid, h_mid = evaluate(h0_mid)
+        if target > 0.0 and abs(load_mid - target) <= 1e-3 * target:
+            h_star, p_star, h_profile = h0_mid, p_mid, h_mid
+            break
+        if (load_lower - target) * (load_mid - target) < 0.0:
+            h0_upper = h0_mid
+            load_upper, p_upper, h_upper = load_mid, p_mid, h_mid
+        else:
+            h0_lower = h0_mid
+            load_lower, p_lower, h_lower = load_mid, p_mid, h_mid
+        h_star, p_star, h_profile = h0_mid, p_mid, h_mid
+
+    asperity_p = asperity_pressure(h_profile, sigma, beta, eta_r, e_prime)
+    hyd_load = trapz(p_star, x) * contact_length
+    asp_load = trapz(asperity_p, x) * contact_length
+
+    dp_dx = gradient(p_star, x)
+    shear_cam = [
+        -eta * sliding_velocity / h + 0.5 * h * dp
+        for h, dp in zip(h_profile, dp_dx)
+    ]
+    friction_h = abs(trapz(shear_cam, x) * contact_length)
+    friction_a = shear_coeff * asp_load
+
+    return EHLSolution(
+        film_centre=h_star,
+        film_minimum=min(h_profile),
+        hydrodynamic_load=hyd_load,
+        asperity_load=asp_load,
+        hydrodynamic_friction=friction_h,
+        asperity_friction=friction_a,
+        x=x,
+        pressure=p_star,
+        film_profile=h_profile,
+    )
+
+
+def run_simulation() -> Dict[str, object]:
+    angle_deg = [
+        -84.0,
+        -83.5,
+        -83.0,
+        -82.5,
+        -82.0,
+        -81.5,
+        -81.0,
+        -80.5,
+        -80.0,
+        -79.5,
+        -79.0,
+        -78.5,
+        -78.0,
+        -77.5,
+        -77.0,
+        -76.5,
+        -76.0,
+        -75.5,
+        -75.0,
+        -74.5,
+        -74.0,
+        -73.5,
+        -73.0,
+        -72.5,
+        -72.0,
+        -71.5,
+        -71.0,
+        -70.5,
+        -70.0,
+        -69.5,
+        -69.0,
+        -68.5,
+        -68.0,
+        -67.5,
+        -67.0,
+        -66.5,
+        -66.0,
+        -65.5,
+        -65.0,
+        -64.5,
+        -64.0,
+        -63.5,
+        -63.0,
+        -62.5,
+        -62.0,
+        -61.5,
+        -61.0,
+        -60.5,
+        -60.0,
+        -59.5,
+        -59.0,
+        -58.5,
+        -58.0,
+        -57.5,
+        -57.0,
+        -56.5,
+        -56.0,
+        -55.5,
+        -55.0,
+        -54.5,
+        -54.0,
+        -53.5,
+        -53.0,
+        -52.5,
+        -52.0,
+        -51.5,
+        -51.0,
+        -50.5,
+        -50.0,
+        -49.5,
+        -49.0,
+        -48.5,
+        -48.0,
+        -47.5,
+        -47.0,
+        -46.5,
+        -46.0,
+        -45.5,
+        -45.0,
+        -44.5,
+        -44.0,
+        -43.5,
+        -43.0,
+        -42.5,
+        -42.0,
+        -41.5,
+        -41.0,
+        -40.5,
+        -40.0,
+        -39.5,
+        -39.0,
+        -38.5,
+        -38.0,
+        -37.5,
+        -37.0,
+        -36.5,
+        -36.0,
+        -35.5,
+        -35.0,
+        -34.5,
+        -34.0,
+        -33.5,
+        -33.0,
+        -32.5,
+        -32.0,
+        -31.5,
+        -31.0,
+        -30.5,
+        -30.0,
+        -29.5,
+        -29.0,
+        -28.5,
+        -28.0,
+        -27.5,
+        -27.0,
+        -26.5,
+        -26.0,
+        -25.5,
+        -25.0,
+        -24.5,
+        -24.0,
+        -23.5,
+        -23.0,
+        -22.5,
+        -22.0,
+        -21.5,
+        -21.0,
+        -20.5,
+        -20.0,
+        -19.5,
+        -19.0,
+        -18.5,
+        -18.0,
+        -17.5,
+        -17.0,
+        -16.5,
+        -16.0,
+        -15.5,
+        -15.0,
+        -14.5,
+        -14.0,
+        -13.5,
+        -13.0,
+        -12.5,
+        -12.0,
+        -11.5,
+        -11.0,
+        -10.5,
+        -10.0,
+        -9.5,
+        -9.0,
+        -8.5,
+        -8.0,
+        -7.5,
+        -7.0,
+        -6.5,
+        -6.0,
+        -5.5,
+        -5.0,
+        -4.5,
+        -4.0,
+        -3.5,
+        -3.0,
+        -2.5,
+        -2.0,
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+        2.5,
+        3.0,
+        3.5,
+        4.0,
+        4.5,
+        5.0,
+        5.5,
+        6.0,
+        6.5,
+        7.0,
+        7.5,
+        8.0,
+        8.5,
+        9.0,
+        9.5,
+        10.0,
+        10.5,
+        11.0,
+        11.5,
+        12.0,
+        12.5,
+        13.0,
+        13.5,
+        14.0,
+        14.5,
+        15.0,
+        15.5,
+        16.0,
+        16.5,
+        17.0,
+        17.5,
+        18.0,
+        18.5,
+        19.0,
+        19.5,
+        20.0,
+        20.5,
+        21.0,
+        21.5,
+        22.0,
+        22.5,
+        23.0,
+        23.5,
+        24.0,
+        24.5,
+        25.0,
+        25.5,
+        26.0,
+        26.5,
+        27.0,
+        27.5,
+        28.0,
+        28.5,
+        29.0,
+        29.5,
+        30.0,
+        30.5,
+        31.0,
+        31.5,
+        32.0,
+        32.5,
+        33.0,
+        33.5,
+        34.0,
+        34.5,
+        35.0,
+        35.5,
+        36.0,
+        36.5,
+        37.0,
+        37.5,
+        38.0,
+        38.5,
+        39.0,
+        39.5,
+        40.0,
+        40.5,
+        41.0,
+        41.5,
+        42.0,
+        42.5,
+        43.0,
+        43.5,
+        44.0,
+        44.5,
+        45.0,
+        45.5,
+        46.0,
+        46.5,
+        47.0,
+        47.5,
+        48.0,
+        48.5,
+        49.0,
+        49.5,
+        50.0,
+        50.5,
+        51.0,
+        51.5,
+        52.0,
+        52.5,
+        53.0,
+        53.5,
+        54.0,
+        54.5,
+        55.0,
+        55.5,
+        56.0,
+        56.5,
+        57.0,
+        57.5,
+        58.0,
+        58.5,
+        59.0,
+        59.5,
+        60.0,
+        60.5,
+        61.0,
+        61.5,
+        62.0,
+        62.5,
+        63.0,
+        63.5,
+        64.0,
+        64.5,
+        65.0,
+        65.5,
+        66.0,
+        66.5,
+        67.0,
+        67.5,
+        68.0,
+        68.5,
+        69.0,
+        69.5,
+        70.0,
+        70.5,
+        71.0,
+        71.5,
+        72.0,
+        72.5,
+        73.0,
+        73.5,
+        74.0,
+        74.5,
+        75.0,
+        75.5,
+        76.0,
+        76.5,
+        77.0,
+        77.5,
+        78.0,
+        78.5,
+        79.0,
+        79.5,
+        80.0,
+    ]
+
+    lift = [
+        3.50133995987153e-07,
+        4.04034209485029e-06,
+        8.09470271650926e-06,
+        1.25258224653037e-05,
+        1.7343669638726e-05,
+        2.25552574905852e-05,
+        2.81643552371878e-05,
+        3.4171232885231e-05,
+        4.05724454281438e-05,
+        4.73606613513079e-05,
+        5.45245397372529e-05,
+        6.20486595990476e-05,
+        6.99135044189894e-05,
+        7.80955042494252e-05,
+        8.65671371548896e-05,
+        9.52970912437324e-05,
+        0.000104250488049717,
+        0.000113389167570163,
+        0.000122672034832951,
+        0.000132055467433139,
+        0.000141493783033375,
+        0.000150939765343726,
+        0.000160345246571343,
+        0.000169661743747176,
+        0.000178841145688491,
+        0.000187836446639552,
+        0.000196602521850453,
+        0.000205096939512558,
+        0.000213280802578935,
+        0.000221119613074295,
+        0.000228584150558327,
+        0.000235651355468615,
+        0.000242305207155526,
+        0.000248537585553833,
+        0.000254349104637639,
+        0.000259749905100696,
+        0.00026476039311891,
+        0.000269411911612227,
+        0.000273747330156938,
+        0.000277821539635005,
+        0.000281701837872524,
+        0.000285468192942075,
+        0.000289213371508094,
+        0.000293042920601414,
+        0.000297074992534031,
+        0.000301440004316666,
+        0.000306280124920307,
+        0.000311748586020076,
+        0.000318008814456829,
+        0.000325233387519634,
+        0.000333602815249632,
+        0.000343304157240413,
+        0.000354529484797168,
+        0.000367474202740806,
+        0.000382335248517679,
+        0.00039930918950617,
+        0.000418590242398151,
+        0.000440368241174475,
+        0.000464826582389684,
+        0.000492140178140047,
+        0.000522473448131179,
+        0.000555978382624571,
+        0.000592792707685788,
+        0.000633038183064989,
+        0.000676819061223429,
+        0.000724220733514917,
+        0.000775308586400798,
+        0.00083012708690489,
+        0.000888699112402403,
+        0.000951025535398558,
+        0.00101708506931019,
+        0.00108683437654113,
+        0.00116020843546153,
+        0.00123712115837683,
+        0.00131746624830992,
+        0.00140111827851063,
+        0.00148793397512923,
+        0.0015777536805052,
+        0.00167040297207584,
+        0.00176569441002999,
+        0.00186342938553467,
+        0.00196340004064662,
+        0.00206539123087337,
+        0.00216918250174452,
+        0.00227455005165871,
+        0.00238126865464109,
+        0.00248911351842961,
+        0.00259786205544862,
+        0.00270729554666448,
+        0.00281720068098442,
+        0.00292737095569239,
+        0.00303760792634544,
+        0.0031477222975189,
+        0.00325753484872488,
+        0.00336687719268166,
+        0.00347559236583016,
+        0.00358353525353596,
+        0.00369057285474568,
+        0.00379658439295868,
+        0.00390146128220877,
+        0.00400510695831591,
+        0.00410743658695718,
+        0.00420837666112234,
+        0.004307864501266,
+        0.00440584767195562,
+        0.00450228332905432,
+        0.00459713751148541,
+        0.00469038439141805,
+        0.00478200549631027,
+        0.00487198891566681,
+        0.00496032850463694,
+        0.00504702309571271,
+        0.005132075728815,
+        0.0052154929089941,
+        0.00529728389984679,
+        0.00537746005958355,
+        0.00545603422549017,
+        0.00553302015133672,
+        0.00560843200111425,
+        0.0056822839013429,
+        0.00575458955311168,
+        0.00582536190399259,
+        0.00589461287903326,
+        0.00596235316918043,
+        0.0060285920747273,
+        0.00609333740071429,
+        0.00615659540064564,
+        0.00621837076441158,
+        0.00627866664592657,
+        0.00633748472570452,
+        0.0063948253033889,
+        0.0064506874151369,
+        0.00650506897071758,
+        0.00655796690522147,
+        0.00660937734038886,
+        0.00665929575074061,
+        0.00670771712993375,
+        0.00675463615305785,
+        0.00680004733093052,
+        0.00684394515283466,
+        0.0068863242145601,
+        0.00692717932906167,
+        0.00696650561752158,
+        0.00700429857910125,
+        0.00704055413818573,
+        0.00707526866845789,
+        0.00710843899368903,
+        0.00714006236568959,
+        0.00717013642042443,
+        0.00719865911385052,
+        0.00722562863957132,
+        0.00725104333090789,
+        0.00727490155044967,
+        0.00729720157055236,
+        0.00731794144858499,
+        0.00733711890097907,
+        0.00735473118028956,
+        0.00737077495953136,
+        0.00738524622799825,
+        0.0073981402026002,
+        0.00740945125846656,
+        0.00741917288215915,
+        0.0074272976503232,
+        0.00743381723598414,
+        0.00743872244398483,
+        0.0074420032762651,
+        0.00744364902683326,
+        0.00744364840538866,
+        0.00744198968765363,
+        0.0074386608895923,
+        0.0074336499618663,
+        0.00742694500013904,
+        0.00741853446622557,
+        0.00740840741462473,
+        0.00739655371869189,
+        0.00738296429062796,
+        0.00736763128958174,
+        0.00735054831247934,
+        0.00733171056268958,
+        0.00731111499227664,
+        0.0072887604143461,
+        0.00726464758281526,
+        0.0072387792377928,
+        0.00721116011559821,
+        0.00718179692325641,
+        0.00715069827804147,
+        0.0071178746133007,
+        0.00708333805235631,
+        0.00704710225275617,
+        0.00700918222353154,
+        0.00696959411842877,
+        0.0069283550083243,
+        0.00688548263622346,
+        0.0068409951583955,
+        0.00679491087532378,
+        0.00674724795626024,
+        0.00669802416127532,
+        0.00664725656479222,
+        0.0065949612846884,
+        0.00654115322113556,
+        0.00648584580942679,
+        0.00642905079110039,
+        0.00637077800770608,
+        0.00631103522156513,
+        0.006249827967844,
+        0.00618715944218583,
+        0.00612303042802098,
+        0.00605743926750058,
+        0.00599038187976231,
+        0.00592185182994093,
+        0.00585184045197263,
+        0.00578033702780969,
+        0.00570732902515654,
+        0.00563280239525788,
+        0.00555674193161336,
+        0.00547913168976172,
+        0.0053999554674728,
+        0.00531919734381249,
+        0.00523684227461083,
+        0.00515287674087541,
+        0.00506728944566234,
+        0.00498007205385877,
+        0.00489121996825851,
+        0.00480073313424293,
+        0.004708616864331,
+        0.00461488267285363,
+        0.00451954911006103,
+        0.00442264258410695,
+        0.00432419815859432,
+        0.00422426031273481,
+        0.0041228836506916,
+        0.00402013354636145,
+        0.00391608670972982,
+        0.00381083166101886,
+        0.00370446909916137,
+        0.00359711215168951,
+        0.00348888649393888,
+        0.00337993032654567,
+        0.00327039420156467,
+        0.00316044068915876,
+        0.00305024387870254,
+        0.00293998871029241,
+        0.00282987013504436,
+        0.00272009210516149,
+        0.00261086639753213,
+        0.00250241127753096,
+        0.00239495001269126,
+        0.00228870924893606,
+        0.00218391726503756,
+        0.00208080212384791,
+        0.0019795897415403,
+        0.00188050189854333,
+        0.00178375421797442,
+        0.00168955413911063,
+        0.00159809891471667,
+        0.00150957366182755,
+        0.00142414949581213,
+        0.00134198177719482,
+        0.00126320849976598,
+        0.00118794884696329,
+        0.00111630194136894,
+        0.00104834580946446,
+        0.000984136580560393,
+        0.000923707935125792,
+        0.000867070813654359,
+        0.000814213392803337,
+        0.000765101330923555,
+        0.00071967828037076,
+        0.000677866659263005,
+        0.000639568670745163,
+        0.000604667553459045,
+        0.000573029042912267,
+        0.00054450301989873,
+        0.000518925319143445,
+        0.000496119669001042,
+        0.000475899731385852,
+        0.000458071210181188,
+        0.000442433996169501,
+        0.000428784317019544,
+        0.000416916862013513,
+        0.00040662685292701,
+        0.000397712034701926,
+        0.00038997456217969,
+        0.000383222762086655,
+        0.000377272752580775,
+        0.000371949905879365,
+        0.000367090142700175,
+        0.00036254105038195,
+        0.000358162819539174,
+        0.000353828996895981,
+        0.000349427054497445,
+        0.000344858777787155,
+        0.000340040477054303,
+        0.000334903028487914,
+        0.000329391752535385,
+        0.000323466138459038,
+        0.000317099424935942,
+        0.000310278047275242,
+        0.000303000962360238,
+        0.000295278862788886,
+        0.000287133291918036,
+        0.00027859567164667,
+        0.000269706254835204,
+        0.000260513014284661,
+        0.00025107048022286,
+        0.000241438538293511,
+        0.00023168120014354,
+        0.000221865358873582,
+        0.000212059541869305,
+        0.000202332673870962,
+        0.000192752863558637,
+        0.000183386227412244,
+        0.000174295765115848,
+        0.000165540301268758,
+        0.000157173508580682,
+        0.000149243027992534,
+        0.000141789701196944,
+        0.000134846930747195,
+        0.000128440182255814,
+        0.000122586642017106,
+        0.00011729504167798,
+        0.000112565659282739,
+        0.000108390503105612,
+        0.000104753681157086,
+        0.000101631955124594,
+        9.89954728227564e-05,
+        9.68086680455124e-05,
+        9.50313111330232e-05,
+        9.36196877294981e-05,
+    ]
+
+    params = dict(
+        rpm=300.0,
+        mass_eq=0.05733,
+        spring_k=7130.0,
+        spring_preload=1.77e-3,
+        base_radius=18.5e-3,
+        contact_length=7.2e-3,
+        e_prime=217e9,
+    )
+
+    kinematics = compute_kinematics(angle_deg, lift, **params)
+
+    viscosity = 0.01381
+    sigma = 0.2e-6
+    beta = 2e-4
+    eta_r = 1.25e9
+    shear_coeff = 0.12
+
+    film_centre: List[float] = []
+    film_minimum: List[float] = []
+    hydrodynamic_load: List[float] = []
+    asperity_load: List[float] = []
+    hydrodynamic_friction: List[float] = []
+    asperity_friction: List[float] = []
+    solutions: List[EHLSolution] = []
+
+    total_angles = len(angle_deg)
+    for idx, (radius, ue, us, load) in enumerate(
+        zip(
+            kinematics.radius_of_curvature,
+            kinematics.entraining_velocity,
+            kinematics.sliding_velocity,
+            kinematics.contact_load,
+        )
+    ):
+        solution = solve_ehl(
+            radius=radius,
+            entraining_velocity=ue,
+            sliding_velocity=us,
+            load=load,
+            contact_length=params["contact_length"],
+            eta=viscosity,
+            e_prime=params["e_prime"],
+            sigma=sigma,
+            beta=beta,
+            eta_r=eta_r,
+            shear_coeff=shear_coeff,
+        )
+        film_centre.append(solution.film_centre)
+        film_minimum.append(solution.film_minimum)
+        hydrodynamic_load.append(solution.hydrodynamic_load)
+        asperity_load.append(solution.asperity_load)
+        hydrodynamic_friction.append(solution.hydrodynamic_friction)
+        asperity_friction.append(solution.asperity_friction)
+        solutions.append(solution)
+        if (idx + 1) % 50 == 0 or idx == total_angles - 1:
+            print(f"Processed {idx + 1}/{total_angles} cam angles")
+
+    max_load_value = max(kinematics.contact_load)
+    max_load_index = kinematics.contact_load.index(max_load_value)
+    representative = solutions[max_load_index]
+
+    return {
+        "angles": angle_deg,
+        "film_centre": film_centre,
+        "film_minimum": film_minimum,
+        "hydrodynamic_load": hydrodynamic_load,
+        "asperity_load": asperity_load,
+        "hydrodynamic_friction": hydrodynamic_friction,
+        "asperity_friction": asperity_friction,
+        "representative_x": representative.x,
+        "representative_pressure": representative.pressure,
+        "representative_film": representative.film_profile,
+        "kinematics": kinematics,
+        "max_load_angle": angle_deg[max_load_index],
+    }
+
+
+def save_results(results: Dict[str, object]) -> None:
+    kinematics = results["kinematics"]
+    serialisable = {
+        "angles": results["angles"],
+        "film_centre": results["film_centre"],
+        "film_minimum": results["film_minimum"],
+        "hydrodynamic_load": results["hydrodynamic_load"],
+        "asperity_load": results["asperity_load"],
+        "hydrodynamic_friction": results["hydrodynamic_friction"],
+        "asperity_friction": results["asperity_friction"],
+        "representative_x": results["representative_x"],
+        "representative_pressure": results["representative_pressure"],
+        "representative_film": results["representative_film"],
+        "kinematics": {
+            "lift": kinematics.lift,
+            "velocity": kinematics.velocity,
+            "acceleration": kinematics.acceleration,
+            "radius_of_curvature": kinematics.radius_of_curvature,
+            "entraining_velocity": kinematics.entraining_velocity,
+            "sliding_velocity": kinematics.sliding_velocity,
+            "contact_load": kinematics.contact_load,
+            "hertz_half_width": kinematics.hertz_half_width,
+            "hertz_pressure": kinematics.hertz_pressure,
+        },
+        "max_load_angle": results["max_load_angle"],
+    }
+    with open("results.json", "w", encoding="utf-8") as fh:
+        json.dump(serialisable, fh, indent=2)
+
+
+if __name__ == "__main__":
+    results = run_simulation()
+    save_results(results)
+import json
+from pathlib import Path
+from typing import List, Tuple
+
+
+COLORS = ["#d62728", "#1f77b4", "#2ca02c", "#9467bd"]
+
+
+def scale_value(value: float, min_value: float, max_value: float, start: float, end: float) -> float:
+    if max_value == min_value:
+        return (start + end) * 0.5
+    return start + (value - min_value) * (end - start) / (max_value - min_value)
+
+
+def build_polyline(points: List[Tuple[float, float]]) -> str:
+    return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+
+
+def create_line_chart(
+    x: List[float],
+    series: List[List[float]],
+    series_labels: List[str],
+    title: str,
+    x_label: str,
+    y_label: str,
+    width: int = 640,
+    height: int = 360,
+) -> str:
+    margin_left = 60
+    margin_bottom = 50
+    margin_top = 40
+    margin_right = 20
+
+    plot_width = width - margin_left - margin_right
+    plot_height = height - margin_top - margin_bottom
+
+    x_min = min(x)
+    x_max = max(x)
+    y_min = min(min(s) for s in series)
+    y_max = max(max(s) for s in series)
+
+    x_ticks = 5
+    y_ticks = 5
+
+    svg_parts = [
+        f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{title}">',
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff" stroke="#cccccc"/>',
+        f'<text x="{width/2:.1f}" y="{margin_top/2:.1f}" text-anchor="middle" font-size="16" font-family="sans-serif">{title}</text>',
+    ]
+
+    # Axes
+    x0 = margin_left
+    y0 = height - margin_bottom
+    x1 = width - margin_right
+    y1 = margin_top
+
+    svg_parts.append(f'<line x1="{x0}" y1="{y0}" x2="{x1}" y2="{y0}" stroke="#000000" stroke-width="1"/>')
+    svg_parts.append(f'<line x1="{x0}" y1="{y0}" x2="{x0}" y2="{y1}" stroke="#000000" stroke-width="1"/>')
+
+    for i in range(x_ticks + 1):
+        frac = i / x_ticks
+        xv = x_min + frac * (x_max - x_min)
+        x_pos = scale_value(xv, x_min, x_max, x0, x1)
+        svg_parts.append(f'<line x1="{x_pos:.2f}" y1="{y0}" x2="{x_pos:.2f}" y2="{y0+5}" stroke="#000000"/>')
+        svg_parts.append(
+            f'<text x="{x_pos:.2f}" y="{y0+20}" text-anchor="middle" font-size="12" font-family="sans-serif">{xv:.1f}</text>'
+        )
+
+    for i in range(y_ticks + 1):
+        frac = i / y_ticks
+        yv = y_min + frac * (y_max - y_min)
+        y_pos = scale_value(yv, y_min, y_max, y0, y1)
+        svg_parts.append(f'<line x1="{x0-5}" y1="{y_pos:.2f}" x2="{x0}" y2="{y_pos:.2f}" stroke="#000000"/>')
+        svg_parts.append(
+            f'<text x="{x0-10}" y="{y_pos+4:.2f}" text-anchor="end" font-size="12" font-family="sans-serif">{yv:.2e}</text>'
+        )
+
+    for idx, series_values in enumerate(series):
+        color = COLORS[idx % len(COLORS)]
+        points = []
+        for xv, yv in zip(x, series_values):
+            px = scale_value(xv, x_min, x_max, x0, x1)
+            py = scale_value(yv, y_min, y_max, y0, y1)
+            points.append((px, py))
+        polyline = build_polyline(points)
+        svg_parts.append(
+            f'<polyline points="{polyline}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+
+    # Legend
+    legend_x = margin_left + 10
+    legend_y = margin_top + 15
+    for idx, label in enumerate(series_labels):
+        color = COLORS[idx % len(COLORS)]
+        ly = legend_y + idx * 18
+        svg_parts.append(f'<rect x="{legend_x}" y="{ly-10}" width="12" height="12" fill="{color}"/>')
+        svg_parts.append(
+            f'<text x="{legend_x + 18}" y="{ly}" font-size="12" font-family="sans-serif" alignment-baseline="middle">{label}</text>'
+        )
+
+    svg_parts.append(
+        f'<text x="{(x0 + x1)/2:.1f}" y="{height - 10}" text-anchor="middle" font-size="13" font-family="sans-serif">{x_label}</text>'
+    )
+    svg_parts.append(
+        f'<text x="{15}" y="{(y0 + y1)/2:.1f}" transform="rotate(-90 15 {(y0 + y1)/2:.1f})" text-anchor="middle" font-size="13" font-family="sans-serif">{y_label}</text>'
+    )
+
+    svg_parts.append("</svg>")
+    return "\n".join(svg_parts)
+
+
+def create_single_series_chart(
+    x: List[float],
+    y: List[float],
+    title: str,
+    x_label: str,
+    y_label: str,
+    unit_scale: float = 1.0,
+    y_unit_scale: float = 1.0,
+    width: int = 640,
+    height: int = 360,
+) -> str:
+    scaled_x = [value * unit_scale for value in x]
+    scaled_y = [value * y_unit_scale for value in y]
+    return create_line_chart(
+        scaled_x,
+        [scaled_y],
+        [""],
+        title,
+        x_label,
+        y_label,
+        width,
+        height,
+    )
+
+
+def main() -> None:
+    data_path = Path("results.json")
+    if not data_path.exists():
+        raise FileNotFoundError("Results file not found. Run simulate_cam_ehl.py first.")
+    with data_path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    angles = data["angles"]
+    film_centre = data["film_centre"]
+    film_minimum = data["film_minimum"]
+    hyd_friction = data["hydrodynamic_friction"]
+    asp_friction = data["asperity_friction"]
+    rep_x = data["representative_x"]
+    rep_pressure = data["representative_pressure"]
+    rep_film = data["representative_film"]
+    max_load_angle = data["max_load_angle"]
+
+    film_chart = create_line_chart(
+        angles,
+        [film_centre, film_minimum],
+        ["Central film", "Minimum film"],
+        "Film thickness vs cam angle",
+        "Cam angle (deg)",
+        "Film thickness (m)",
+    )
+
+    pressure_chart = create_line_chart(
+        [x * 1e3 for x in rep_x],
+        [rep_pressure],
+        ["Hydrodynamic pressure"],
+        f"Pressure profile at angle {max_load_angle:.1f}°",
+        "Contact coordinate (mm)",
+        "Pressure (Pa)",
+    )
+
+    film_profile_chart = create_line_chart(
+        [x * 1e3 for x in rep_x],
+        [rep_film],
+        ["Film thickness"],
+        f"Film profile at angle {max_load_angle:.1f}°",
+        "Contact coordinate (mm)",
+        "Film thickness (m)",
+    )
+
+    hydro_friction_chart = create_line_chart(
+        angles,
+        [hyd_friction],
+        ["Hydrodynamic friction"],
+        "Hydrodynamic friction vs cam angle",
+        "Cam angle (deg)",
+        "Friction force (N)",
+    )
+
+    asperity_friction_chart = create_line_chart(
+        angles,
+        [asp_friction],
+        ["Asperity friction"],
+        "Asperity friction vs cam angle",
+        "Cam angle (deg)",
+        "Friction force (N)",
+    )
+
+    html = """<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <title>Cam-Tappet Mixed Lubrication Results</title>
+  <style>
+    body {{ font-family: sans-serif; background: #f7f7f7; color: #222; }}
+    .chart {{ margin: 20px auto; max-width: 660px; background: #fff; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }}
+    h1 {{ text-align: center; }}
+    p.meta {{ text-align: center; }}
+  </style>
+</head>
+<body>
+  <h1>Cam-Tappet Mixed Lubrication Simulation</h1>
+  <p class=\"meta\">Representative pressure and film profile correspond to cam angle {angle:.1f}°</p>
+  <div class=\"chart\">{film_chart}</div>
+  <div class=\"chart\">{film_profile_chart}</div>
+  <div class=\"chart\">{pressure_chart}</div>
+  <div class=\"chart\">{hydro_friction_chart}</div>
+  <div class=\"chart\">{asperity_friction_chart}</div>
+</body>
+</html>
+""".format(
+        angle=max_load_angle,
+        film_chart=film_chart,
+        film_profile_chart=film_profile_chart,
+        pressure_chart=pressure_chart,
+        hydro_friction_chart=hydro_friction_chart,
+        asperity_friction_chart=asperity_friction_chart,
+    )
+
+    output_path = Path("cam_ehl_plots.html")
+    output_path.write_text(html, encoding="utf-8")
+    print(f"Saved visualisations to {output_path}")
+
+
+if __name__ == "__main__":
+    main()
