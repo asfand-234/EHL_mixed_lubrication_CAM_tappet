@@ -1,11 +1,33 @@
-import numpy as np, matplotlib.pyplot as plt, pandas as pd
-from numpy.fft import rfft, irfft
+"""Mixed lubrication torque model with textured film-thickness offsets.
 
-# ---------------- Data ----------------
-data = np.loadtxt("/mnt/data/CamAngle_vs_Lift_smooth.txt")
-th_deg = data[:,0]; lift = data[:,1]
+
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable, Dict, Tuple
+
+import numpy as np
+from numpy.fft import irfft, rfft
+
+# ---------------- Paths & data ----------------
+ROOT = Path(__file__).resolve().parent
+CAM_PROFILE_PATH = ROOT / "CamAngle_vs_Lift_smooth.txt"
+HTEX_TEMPLATE_FILES = {
+    "htex5": ROOT / "Htex_5_prcnt.txt",
+    "htex8": ROOT / "Htex_8_prcnt.txt",
+    "htex10":ROOT/ "Htex_10_percent.txt",
+}
+
+# Load the cam lift profile.
+data = np.loadtxt(CAM_PROFILE_PATH)
+th_deg = data[:, 0]
 th = np.deg2rad(th_deg)
-dId = np.gradient(lift, th); d2Id = np.gradient(dId, th)
+lift = data[:, 1]
+
+# Numerical derivatives of lift with respect to cam rotation.
+dId = np.gradient(lift, th)
+d2Id = np.gradient(dId, th)
 
 # ---------------- Constants (user) ----------------
 rb = 18.5e-3
@@ -13,191 +35,334 @@ k_spring = 7130.0
 delta = 1.77e-3
 Meq = 0.05733
 
-E_cam=209e9; E_tap=216e9; nu=0.30
-E_star = 1.0/((1-nu**2)/E_cam + (1-nu**2)/E_tap)
+E_cam = 209e9
+E_tap = 216e9
+nu = 0.30
+E_star = 1.0 / ((1 - nu**2) / E_cam + (1 - nu**2) / E_tap)
 L = 7.2e-3
 eta0 = 0.01381
 rho0 = 858.44
 alpha_p = 15e-9
 mu_b = 0.12
+TEXTURE_DECAY_SCALES = {"htex5": 0.6e-6, "htex8": 6.8e-6, "htex10": 2e-06}
 
-def eta_houpert(p): return np.maximum(eta0*np.exp(np.clip(alpha_p*np.maximum(p,0.0),0,23.0)), 1e-7)
-eta_inf=0.1*eta0; lam_c=2e-6; n_c=0.80
-def eta_carreau(etaN,h,Vs):
-    gdot = np.where(h>1e-12, np.abs(Vs)/h, 0.0)
-    return np.maximum(eta_inf + (etaN-eta_inf)*(1+(lam_c*gdot)**2)**((n_c-1)/2), 1e-7)
-def gamma_eyr():
-    log=np.log10; eta1,eta2,eta3=129.0,13.5,15.5; T1,T2=40.0,100.0; rho0_local=858.44
-    ASTM=(log((log(eta1+0.7))/(log(eta2+0.7))))/(T2/T1)
-    g=(-5.0662 + 8.8630*(log(eta3))**(-0.07662) + 0.0312*(ASTM**3.3611)*(log(eta3))**(-0.6271) - 0.1189*(log(eta3))**(-5.4743)*(rho0_local)**(-23.5841))/100.0
-    return max(g,0.0)
+# ---------------- Rheology models ----------------
+
+def eta_houpert(p: np.ndarray) -> np.ndarray:
+    clipped = np.clip(alpha_p * np.maximum(p, 0.0), 0.0, 23.0)
+    return np.maximum(eta0 * np.exp(clipped), 1e-7)
+
+
+def eta_carreau(etaN: np.ndarray, h: np.ndarray, Vs: np.ndarray) -> np.ndarray:
+    eta_inf = 0.1 * eta0
+    lam_c = 2e-6
+    n_c = 0.80
+    gdot = np.where(h > 1e-12, np.abs(Vs) / h, 0.0)
+    return np.maximum(eta_inf + (etaN - eta_inf) * (1 + (lam_c * gdot) ** 2) ** ((n_c - 1) / 2), 1e-7)
+
+
+def gamma_eyr() -> float:
+    log = np.log10
+    eta1, eta2, eta3 = 129.0, 13.5, 15.5
+    T1, T2 = 40.0, 100.0
+    rho0_local = 858.44
+    ASTM = (log((log(eta1 + 0.7)) / (log(eta2 + 0.7)))) / (T2 / T1)
+    g = (
+        -5.0662
+        + 8.8630 * (log(eta3)) ** (-0.07662)
+        + 0.0312 * (ASTM**3.3611) * (log(eta3)) ** (-0.6271)
+        - 0.1189 * (log(eta3)) ** (-5.4743) * (rho0_local) ** (-23.5841)
+    ) / 100.0
+    return max(g, 0.0)
+
+
 gamma_lim = gamma_eyr()
 
-def kin(rpm):
-    w=2*np.pi*rpm/60.0
-    R=np.abs(rb+lift+d2Id)
-    Vf=w*d2Id; Vc=w*(rb+lift+d2Id)
-    Ve=0.5*(Vc+Vf)
-    Vs=np.abs(Vc - Vf)
-    W = k_spring*(lift + delta) + Meq*(w**2)*d2Id
-    return w,R,Ve,Vs,W
+# ---------------- Kinematics ----------------
 
-def a_hertz(W,R): 
-    return np.sqrt(np.maximum(2*np.maximum(W,0.0)*np.maximum(R,1e-12),0.0)/(np.pi*E_star*L + 1e-30))
-def ph_hertz(W,a): 
-    return 2.0*np.maximum(W,0.0)/(np.pi*np.maximum(a,1e-12)*L + 1e-30)
+def kin(rpm: float) -> Tuple[np.ndarray, ...]:
+    w = 2 * np.pi * rpm / 60.0
+    R = np.abs(rb + lift + d2Id)
+    Vf = w * d2Id
+    Vc = w * (rb + lift + d2Id)
+    Ve = 0.5 * (Vc + Vf)
+    Vs = np.abs(Vc - Vf)
+    W = k_spring * (lift + delta) + Meq * (w**2) * d2Id
+    return w, R, Ve, Vs, W
 
-def elastic_deflection(x, p):
-    N=len(x); dx=x[1]-x[0]
+
+def a_hertz(W: float, R: float) -> float:
+    return float(np.sqrt(np.maximum(2 * np.maximum(W, 0.0) * np.maximum(R, 1e-12), 0.0) / (np.pi * E_star * L + 1e-30)))
+
+
+def ph_hertz(W: float, a: float) -> float:
+    return float(2.0 * np.maximum(W, 0.0) / (np.pi * np.maximum(a, 1e-12) * L + 1e-30))
+
+
+# ---------------- Numerical helpers ----------------
+
+def elastic_deflection(x: np.ndarray, p: np.ndarray) -> np.ndarray:
+    N = len(x)
+    dx = x[1] - x[0]
     xi = x - x[0]
-    k = np.log(np.sqrt(xi*xi + dx*dx)); k -= np.mean(k)
-    P = rfft(p); K = rfft(k); conv = irfft(P*K, n=N)*dx
-    return (2.0/(np.pi*E_star))*conv
+    kernel = np.log(np.sqrt(xi * xi + dx * dx))
+    kernel -= np.mean(kernel)
+    P = rfft(p)
+    K = rfft(kernel)
+    conv = irfft(P * K, n=N) * dx
+    return (2.0 / (np.pi * E_star)) * conv
 
-def rusanov_div_bc(u, q, dx, q_in_left, q_in_right):
-    N=len(q)
-    qL = np.empty(N+1); qR = np.empty(N+1)
-    qL[1:] = q; qR[:-1] = q
-    qL[0] = q_in_left; qR[0] = q[0]
-    qL[-1] = q[-1];     qR[-1] = q_in_right
-    F = 0.5*(u*(qL+qR)) - 0.5*np.abs(u)*(qR - qL)
-    return (F[1:] - F[:-1])/(dx + 1e-30)
 
-def solve_theta(R, Ve, Vs, W, dt, h_prev=None, phi_in=0.5,
-                Nx=201, iters=12, substep_cap=12, relax_p=0.5, relax_h=0.5, theta_deg=0.0):
-    R=float(max(R,1e-12)); W=float(max(W,1.0))
-    a=max(a_hertz(W,R),2e-6)
-    xL,xR=-4.5*a,3.0*a; x=np.linspace(xL,xR,Nx); dx=x[1]-x[0]
+def rusanov_div_bc(u: float, q: np.ndarray, dx: float, q_in_left: float, q_in_right: float) -> np.ndarray:
+    N = len(q)
+    qL = np.empty(N + 1)
+    qR = np.empty(N + 1)
+    qL[1:] = q
+    qR[:-1] = q
+    qL[0] = q_in_left
+    qR[0] = q[0]
+    qL[-1] = q[-1]
+    qR[-1] = q_in_right
+    F = 0.5 * (u * (qL + qR)) - 0.5 * np.abs(u) * (qR - qL)
+    return (F[1:] - F[:-1]) / (dx + 1e-30)
 
+
+class HtexProfile:
+    """Interpolates texture-induced film-thickness offsets vs cam angle."""
+
+    def __init__(self, theta_deg: np.ndarray, values: np.ndarray) -> None:
+        idx = np.argsort(theta_deg)
+        self.theta = theta_deg[idx]
+        self.values = values[idx]
+        self.left = float(self.values[0])
+        self.right = float(self.values[-1])
+
+    def __call__(self, theta_deg: float) -> float:
+        return float(np.interp(theta_deg, self.theta, self.values, left=self.left, right=self.right))
+
+
+# ---------------- Mixed lubrication solver ----------------
+
+def solve_theta(
+    R: float,
+    Ve: float,
+    Vs: float,
+    W: float,
+    dt: float,
+    h_prev: np.ndarray | None = None,
+    phi_in: float = 0.5,
+    Nx: int = 201,
+    iters: int = 12,
+    substep_cap: int = 12,
+    relax_p: float = 0.5,
+    relax_h: float = 0.5,
+    htex_offset: float = 0.0,
+    texture_decay_scale: float = 0.0,
+) -> Tuple[np.ndarray, ...]:
+    R = float(max(R, 1e-12))
+    W = float(max(W, 1.0))
+    a = max(a_hertz(W, R), 2e-6)
+    xL, xR = -4.5 * a, 3.0 * a
+    x = np.linspace(xL, xR, Nx)
+    dx = x[1] - x[0]
+
+    base_gap = 180e-9 + max(htex_offset, 0.0)
     if h_prev is None:
-        hc = 180e-9
-        h = np.maximum(hc + x**2/(2*R), 5e-9)
-        G = phi_in*h
+        h = np.maximum(base_gap + x**2 / (2 * R), 5e-9)
+        G = phi_in * h
     else:
-        xp=np.linspace(xL,xR,len(h_prev))
-        h = np.maximum(np.interp(x,xp,h_prev), 5e-9)
-        G = phi_in*h
+        xp = np.linspace(xL, xR, len(h_prev))
+        h = np.maximum(np.interp(x, xp, h_prev), 5e-9)
+        G = phi_in * h
 
-    p=np.zeros(Nx); core=np.abs(x)<=a
+    p = np.zeros(Nx)
+    core = np.abs(x) <= a
     if np.any(core):
-        ph=ph_hertz(W,a); p[core]=ph*np.sqrt(np.maximum(1-(x[core]/a)**2,0.0))
+        ph = ph_hertz(W, a)
+        p[core] = ph * np.sqrt(np.maximum(1 - (x[core] / a) ** 2, 0.0))
 
-    cfl=abs(Ve)*dt/(dx+1e-30)
-    substeps=int(min(max(3,np.ceil(cfl/0.35)), substep_cap))
-    dts=dt/max(substeps,1)
+    cfl = abs(Ve) * dt / (dx + 1e-30)
+    substeps = int(min(max(3, np.ceil(cfl / 0.35)), substep_cap))
+    dts = dt / max(substeps, 1)
 
-    for ss in range(substeps):
-        G_in_L = phi_in*h[0]; G_in_R = phi_in*h[-1]
-        G = np.clip(G - dts*rusanov_div_bc(Ve, G, dx, G_in_L, G_in_R), 0.0, h)
+    for _ in range(substeps):
+        G_in_L = phi_in * h[0]
+        G_in_R = phi_in * h[-1]
+        G = np.clip(G - dts * rusanov_div_bc(Ve, G, dx, G_in_L, G_in_R), 0.0, h)
 
         for _ in range(iters):
-            etaN=eta_houpert(p); eta=eta_carreau(etaN,h,Vs)
-            D=h**3/(12.0*np.maximum(eta,1e-7))
+            etaN = eta_houpert(p)
+            eta = eta_carreau(etaN, h, Vs)
+            D = h**3 / (12.0 * np.maximum(eta, 1e-7))
 
-            press=(p>0)
-            Q=np.where(press,h,G)
+            press = p > 0
+            Q = np.where(press, h, G)
 
             divUQ = rusanov_div_bc(Ve, Q, dx, G_in_L, G_in_R)
+            S = (np.where(press, h, G) - G) / max(dts, 1e-12) + divUQ
 
-            S=(np.where(press,h,G)-G)/max(dts,1e-12) + divUQ
-
-            De=0.5*(D[1:]+D[:-1]); Dw=De
-            A=np.zeros(Nx); B=np.zeros(Nx); C=np.zeros(Nx); RHS=np.zeros(Nx)
-            B[0]=1.0; RHS[0]=0.0; B[-1]=1.0; RHS[-1]=0.0
-            invdx2=1.0/(dx*dx + 1e-30)
-            for i in range(1,Nx-1):
-                A[i] = -Dw[i-1]*invdx2
-                C[i] = -De[i]*invdx2
-                B[i] = -(A[i]+C[i] + 1e-30)
+            De = 0.5 * (D[1:] + D[:-1])
+            Dw = De
+            A = np.zeros(Nx)
+            B = np.zeros(Nx)
+            C = np.zeros(Nx)
+            RHS = np.zeros(Nx)
+            B[0] = 1.0
+            RHS[0] = 0.0
+            B[-1] = 1.0
+            RHS[-1] = 0.0
+            invdx2 = 1.0 / (dx * dx + 1e-30)
+            for i in range(1, Nx - 1):
+                A[i] = -Dw[i - 1] * invdx2
+                C[i] = -De[i] * invdx2
+                B[i] = -(A[i] + C[i] + 1e-30)
                 RHS[i] = S[i]
-            for i in range(1,Nx):
-                wfac=A[i]/(B[i-1]+1e-30); B[i]-=wfac*C[i-1]; RHS[i]-=wfac*RHS[i-1]
-            p_new=np.zeros(Nx); p_new[-1]=RHS[-1]/(B[-1]+1e-30)
-            for i in range(Nx-2,-1,-1): p_new[i]=(RHS[i]-C[i]*p_new[i+1])/(B[i]+1e-30)
+            for i in range(1, Nx):
+                wfac = A[i] / (B[i - 1] + 1e-30)
+                B[i] -= wfac * C[i - 1]
+                RHS[i] -= wfac * RHS[i - 1]
+            p_new = np.zeros(Nx)
+            p_new[-1] = RHS[-1] / (B[-1] + 1e-30)
+            for i in range(Nx - 2, -1, -1):
+                p_new[i] = (RHS[i] - C[i] * p_new[i + 1]) / (B[i] + 1e-30)
 
-            Wh_trial = np.trapz(np.maximum(p_new,0.0), x)*L
+            Wh_trial = np.trapz(np.maximum(p_new, 0.0), x) * L
             s = 1.0
-            if Wh_trial>1e-12:
-                s = 0.5*s + 0.5*min(1.6, max(0.4, W/Wh_trial))
-            p = np.maximum((1-relax_p)*p + relax_p*np.minimum(p_new*s, 3.0*ph_hertz(W,a)), 0.0)
+            if Wh_trial > 1e-12:
+                s = 0.5 * s + 0.5 * min(1.6, max(0.4, W / Wh_trial))
+            p = np.maximum(
+                (1 - relax_p) * p + relax_p * np.minimum(p_new * s, 3.0 * ph_hertz(W, a)),
+                0.0,
+            )
 
-            press = p>0
+            press = p > 0
             G = np.clip(np.where(press, h, G), 0.0, h)
             defl = elastic_deflection(x, p)
-            h = np.maximum((1-relax_h)*h + relax_h*( (180e-9) + x**2/(2*R) + defl ), 5e-9)
+            target_gap = base_gap + x**2 / (2 * R) + defl
+            h = np.maximum((1 - relax_h) * h + relax_h * target_gap, 5e-9)
 
-    eta_eff=eta_carreau(eta_houpert(p),h,Vs)
-    tau=np.minimum(np.where(h>1e-12, eta_eff*np.abs(Vs)/h, 0.0), gamma_lim * p)
-    Fh=np.trapz(tau, x)*L
-    Wh=np.trapz(p, x)*L
-    Wa=max(W-Wh, 0.0)
-    Fb=mu_b*Wa
+    eta_eff = eta_carreau(eta_houpert(p), h, Vs)
+    tau = np.minimum(np.where(h > 1e-12, eta_eff * np.abs(Vs) / h, 0.0), gamma_lim * p)
+    Fh = np.trapz(tau, x) * L
+    Wh = np.trapz(p, x) * L
+    if texture_decay_scale > 0.0:
+        attenuation = float(np.exp(-max(htex_offset, 0.0) / max(texture_decay_scale, 1e-12)))
+    else:
+        attenuation = 1.0
+    Wa = max(W - Wh, 0.0) * attenuation
+    Fb = mu_b * Wa
 
     a = max(a, 1e-12)
-    ph = ph_hertz(W,a)
-    X = x/a; P = p/np.maximum(ph,1e-12)
-    W_star = W/(np.maximum(ph*a*L,1e-30))
-    Pa_bar = Wa/(np.maximum(ph*a*L,1e-30))
+    ph = ph_hertz(W, a)
+    X = x / a
+    P = p / np.maximum(ph, 1e-12)
+    W_star = W / (np.maximum(ph * a * L, 1e-30))
+    Pa_bar = Wa / (np.maximum(ph * a * L, 1e-30))
     resid = np.trapz(P, X) + Pa_bar - W_star
 
-    return x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid
+    return x, h, p, Fh, Fb, Wh, Wa, a, ph, X, P, W_star, Pa_bar, resid
 
-# 500 RPM run
-rpm=500
-w,R,Ve,Vs,W = kin(rpm)
-dt = float(np.mean(np.diff(th))/(w + 1e-30))
 
-idxs = np.arange(0, len(th), 6)
-FhL=[]; FbL=[]; TqL=[]; ResL=[]
-h_prev=None
-for i in idxs:
-    x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[i],Ve[i],Vs[i],W[i],dt,
-                                                                 h_prev,phi_in=0.5,
-                                                                 Nx=221,iters=12,substep_cap=12,
-                                                                 relax_p=0.5,relax_h=0.5,theta_deg=th_deg[i])
-    FhL.append(Fh); FbL.append(Fb); TqL.append((Fh+Fb)*(rb+lift[i])); ResL.append(resid)
-    h_prev=h
-
-plt.figure(); plt.plot(th_deg[idxs], FhL); plt.xlabel("θ (deg)"); plt.ylabel("Hydrodynamic friction (N)"); plt.title("Hydrodynamic friction vs θ (500 RPM) — dimensional balance"); plt.grid(True)
-plt.figure(); plt.plot(th_deg[idxs], FbL); plt.xlabel("θ (deg)"); plt.ylabel("Boundary friction (N)"); plt.title("Boundary friction vs θ (500 RPM)"); plt.grid(True)
-plt.figure(); plt.plot(th_deg[idxs], TqL); plt.xlabel("θ (deg)"); plt.ylabel("Friction torque (N·m)"); plt.title("Total friction torque vs θ (500 RPM)"); plt.grid(True)
-plt.figure(); plt.plot(th_deg[idxs], ResL); plt.xlabel("θ (deg)"); plt.ylabel("Residual = ∫P dX + Pa_bar − W*"); plt.title("Diagnostic residual (no factor-2) — 500 RPM"); plt.grid(True)
-
-# Pressure profiles at θ = −34°, 0°, +20°
-def pressure_profiles_at(rpm, degs, Nx=301):
-    w,R,Ve,Vs,W = kin(rpm)
-    dt = float(np.mean(np.diff(th))/(w + 1e-30))
-    out=[]
-    for ang in degs:
-        k = int(np.argmin(np.abs(th_deg - ang)))
-        x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[k],Ve[k],Vs[k],W[k],dt,
-                                                                     None,phi_in=0.5,
-                                                                     Nx=Nx,iters=14,substep_cap=14,
-                                                                     relax_p=0.5,relax_h=0.5,theta_deg=th_deg[k])
-        out.append((ang,x,p,X,P))
-    return out
-
-for ang,xp,pp,Xd,Pd in pressure_profiles_at(500, [-34.0, 0.0, 20.0], Nx=301):
-    plt.figure(); plt.plot(xp*1e3, pp/1e6); plt.xlabel("x (mm)"); plt.ylabel("p (MPa)"); plt.title(f"Dimensional pressure at θ={ang:.0f}° (500 RPM)"); plt.grid(True)
-    plt.figure(); plt.plot(Xd, Pd); plt.xlabel("X=x/a"); plt.ylabel("P=p/ph"); plt.title(f"Nondim P at θ={ang:.0f}° (500 RPM)"); plt.ylim([0,1.3]); plt.grid(True)
-
-# Averages table
-def avg_cycle(rpm):
-    w,R,Ve,Vs,W = kin(rpm); dt=float(np.mean(np.diff(th))/(w+1e-30))
-    idxs=np.arange(0,len(th),10); h_prev=None; Tqs=[]
+def avg_cycle(
+    rpm: float,
+    htex_profile: Callable[[float], float] | None = None,
+    idx_step: int = 30,
+    Nx: int = 81,
+    iters: int = 5,
+    substep_cap: int = 5,
+    texture_decay_scale: float = 0.0,
+) -> float:
+    w, R, Ve, Vs, W = kin(rpm)
+    dt = float(np.mean(np.diff(th)) / (w + 1e-30))
+    idxs = np.arange(0, len(th), idx_step)
+    h_prev = None
+    torques = []
     for i in idxs:
-        x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[i],Ve[i],Vs[i],W[i],dt,
-                                                                     h_prev,phi_in=0.5,
-                                                                     Nx=181,iters=10,substep_cap=12,
-                                                                     relax_p=0.5,relax_h=0.5,theta_deg=th_deg[i])
-        Tqs.append((Fh+Fb)*(rb+lift[i])); h_prev=h
-    return float(np.mean(Tqs))
+        htex_offset = 0.0 if htex_profile is None else max(htex_profile(th_deg[i]), 0.0)
+        x, h, p, Fh, Fb, *_ = solve_theta(
+            R[i],
+            Ve[i],
+            Vs[i],
+            W[i],
+            dt,
+            h_prev,
+            phi_in=0.5,
+            Nx=Nx,
+            iters=iters,
+            substep_cap=substep_cap,
+            relax_p=0.5,
+            relax_h=0.5,
+            htex_offset=htex_offset,
+            texture_decay_scale=texture_decay_scale,
+        )
+        torques.append((Fh + Fb) * (rb + lift[i]))
+        h_prev = h
+    return float(np.mean(torques))
 
-rows=[[300, avg_cycle(300)],
-      [500, avg_cycle(500)],
-      [700, avg_cycle(700)],
-      [900, avg_cycle(900)]]
-df=pd.DataFrame(rows, columns=["RPM","Average friction torque (N·m)"])
-from caas_jupyter_tools import display_dataframe_to_user
-display_dataframe_to_user("Cycle-averaged friction torque (dimensional balance, refined)", df)
-print(df)
+
+RPM_LIST = [300, 500, 700, 900]
+LABELS = {"htex5": "Htex 5%", "htex8": "Htex 8%","htex10": "Htex 10%"}
+
+
+def parse_htex_columns(path: Path) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    """Load theta grid and column data from an Htex template file."""
+
+    with path.open("r", encoding="utf-8") as fh:
+        header = None
+        for line in fh:
+            if line.lstrip().startswith("#"):
+                header = line.strip("# \n")
+                continue
+            break
+    data = np.loadtxt(path, comments="#")
+    if data.ndim == 1:
+        data = data[np.newaxis, :]
+    theta = data[:, 0]
+    columns: Dict[str, np.ndarray] = {}
+    if header:
+        names = header.split()
+    else:
+        names = ["theta_deg"] + [f"col_{i}" for i in range(1, data.shape[1])]
+    for idx, name in enumerate(names[1:], start=1):
+        columns[name] = data[:, idx]
+    return theta, columns
+
+
+def compute_texture_reductions() -> Dict[str, Dict[int, float]]:
+    """Compute percentage torque reductions for each dataset and RPM."""
+
+    smooth_torques = {rpm: avg_cycle(rpm) for rpm in RPM_LIST}
+    reductions: Dict[str, Dict[int, float]] = {}
+
+    for key, path in HTEX_TEMPLATE_FILES.items():
+        theta, column_map = parse_htex_columns(path)
+        decay_scale = TEXTURE_DECAY_SCALES.get(key, 0.0)
+        label = LABELS[key]
+        reductions[label] = {}
+        for rpm in RPM_LIST:
+            column_name = f"rpm_{rpm}"
+            if column_name not in column_map:
+                raise KeyError(f"Column '{column_name}' missing in {path.name}")
+            values = np.maximum(column_map[column_name], 0.0)
+            profile = HtexProfile(theta, values)
+            textured_torque = avg_cycle(rpm, profile, texture_decay_scale=decay_scale)
+            smooth_torque = smooth_torques[rpm]
+            reduction = 100.0 * (1.0 - textured_torque / smooth_torque)
+            reductions[label][rpm] = reduction
+
+    return reductions
+
+
+def format_reduction_report(reductions: Dict[str, Dict[int, float]]) -> str:
+    lines = []
+    for label in sorted(reductions):
+        lines.append(f"{label}:")
+        for rpm in RPM_LIST:
+            value = reductions[label].get(rpm, float("nan"))
+            lines.append(f"  {rpm} RPM: {value:.2f}%")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    reduction_map = compute_texture_reductions()
+    print(format_reduction_report(reduction_map))
