@@ -27,7 +27,7 @@ RPM    5_percnt   8_percnt   10_percnt
 ## Physics to (re)implement/upgrade (single‑file approach)
 - **Film thickness**: `h(x,t) = h_geom(x,t) + h_tex(x)`; `h_geom` from cam kinematics; `h_tex` supports duty, depth, pitch, and phase with **C¹** ramps; enforce **volume neutrality** over a period.
 - **Reynolds (1‑D, mass‑conserving)**: implicit finite‑difference/finite‑volume, with saturation variable θ ∈ [0,1] and flux continuity at rupture/reformation boundaries.
-- **Viscosity**: Barus `μ = μ0 exp(α p)` or Roelands (choose based on regime); optional **Eyring shear cap** (τ₀ ≈ 2–5 MPa) if shear rates warrant.
+- **Viscosity**: Barus `μ = μ0 exp(α p)` or Roelands (choose based on regime).
 - **Mixed regime**: Patir–Cheng flow factors (1‑D approximation) and Greenwood–Tripp asperity contact for shear/normal support (no tuning to targets).
 - **Friction & torque**: τ_hyd = μU/h + 0.5 h ∂x p; add asperity shear; integrate over x, map to cam torque, **average over a full cam cycle**; compute % reduction vs untextured.
 - **Operating points**: RPM ∈ {300, 500, 700, 900}; scenarios ∈ {S5, S8, S10}.
