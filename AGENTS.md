@@ -18,18 +18,11 @@ RPM    5_percnt   8_percnt   10_percnt
 ```
 
 ## Non‑Negotiables
-1) **No calibration/fitting/non‑physical scaling.** Physics/numerics improvements only.  
-2) **Mass‑conserving cavitation** (Elrod–Adams/JFO) with saturation \(\theta\in[0,1]\).  
-3) **Stable, convergent, deterministic** Reynolds solver under textures.  
-4) **Single-file, pure-Python (NumPy-only)** solution that runs **here**. No extra project scaffolding.  
-5) **Output policy**: During iteration, **print only** the evolving 4×3 table. Upon success, **print only** the final Colab script source. No other text, comments, or diagnostics in chat.
+1) **No calibration/fitting/non‑physical scaling.** Physics/numerics improvements only. 
+2) **Stable, convergent, deterministic** Reynolds solver under textures.  
+3) **Single-file, pure-Python (NumPy-only)** solution that runs **here**. No extra project scaffolding.  
+4) **Output policy**: During iteration, **print only** the evolving 4×3 table. Upon success, **print only** the final Colab script source. No other text, comments, or diagnostics in chat.
 
-## Physics (single-file implementation)
-- Film thickness: \(h(x,t)=h_{geom}(x,t)+h_{tex}(x)\), with \(h_{geom}\) from kinematics and \(h_{tex}\) periodic grooves (depth, duty, pitch, volume-neutral, C¹ ramps).
-- Reynolds (1‑D, mass-conserving): implicit finite difference/volume; switch to Elrod–Adams with flux continuity at rupture/reformation; enforce non-negative pressures.
-- Viscosity: Barus `μ=μ0 exp(αp)` or Roelands (choose by regime); optional Eyring cap `τ≤τ0` if shear rates justify.
-- Mixed regime: Patir–Cheng flow factors (1‑D approximation) and Greenwood–Tripp asperity contact **from literature** (not tuned to targets).
-- Friction/torque: `τ_h=μU/h + 0.5 h ∂x p` + asperity shear; integrate over x; convert to torque with cam radius; average over full cycle; compute % reduction vs untextured.
 - Operating points: RPM ∈ {300,500,700,900}; scenarios ∈ {S5,S8,S10}.
 
 ## Acceptance Gate (all must pass)
@@ -50,7 +43,6 @@ RPM    5_percnt   8_percnt   10_percnt
 
 3. **Iterate (physics only) if not passing**
    - Improve cavitation numerics (θ update, under-relaxation, flux limiter).
-   - Switch Barus↔Roelands or enable Eyring based on computed shear rate.
    - Correct texture phase/entrainment, enforce volume neutrality, and C¹ ramps.
    - Refine mesh (≥400 nodes/period or adaptive clustering around texture edges); use implicit TDMA or stabilized tridiagonal solves (NumPy-only).
    - Re-run and **print only** the updated table.
