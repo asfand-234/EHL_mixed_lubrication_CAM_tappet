@@ -6,15 +6,15 @@ The target results are given as,
 
  TARGET RESULTS:
 RPM    5_percnt     8_percnt    10_percnt
-300     3.4%             7.95%         3.4%
-500    6.12%           8.92%         10.71%
-700    4.21%           14.11%        9.4%
-900    18.33%         11.91%        6.87%
+300     3.4%         7.95%        3.4%
+500    6.12%         8.92%        10.71%
+700    4.21%         14.11%        9.4%
+900    18.33%        11.91%        6.87%
 
 
 2) Codex must optimize all physics present in script and/or add more real physics where necessary and optimize the texture model to meet at least 85% same target results. 
 
-3) Codex must never do any calibration/fitting/non-physical scaling. Codex never do any surrogation or regression, rather it must focus on all physics to get target results.
+3) NEVER do any calibration/fitting/non-physical scaling. NEVER do any surrogation or regression, rather ONLY focus on all physics to get target results.
 During testing, codex must print its predicted % averaged friction torque reduction and if the results are not at least 85% then codex start with improved strategies to meet the target.
 
 4) Deliverables:
