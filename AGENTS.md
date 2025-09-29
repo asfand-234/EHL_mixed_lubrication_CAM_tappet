@@ -43,12 +43,10 @@ Implement or upgrade to the following **without violating Rule #1**:
   - Smooth transitions with **C¹ ramps** to prevent numerical ringing.
 
 ### Reynolds Equation (Compressible, Isoviscous‑Incompressible base is acceptable if justified)
-- Discretize 1‑D steady‑quasi‑static form at each time/cam‑angle step with **finite volume** or **finite difference (2nd order where possible)**:
-
-  \( \partial_x (\Phi h^3 \partial_x p) = 6\mu U\partial_x h + 12\mu \partial_t h \), with appropriate switch to Elrod‑Adams mass‑conserving cavitation (see below).
+- Discretize 1‑D unsteady‑quasi‑static form at each time/cam‑angle step with **finite volume** or **finite difference (2nd order where possible)**, with appropriate switch to Elrod‑Adams mass‑conserving cavitation (see below).
 - **Mass‑conserving cavitation**: **Elrod–Adams** or **JFO** implementation with saturation variable \(\theta\in[0,1]\); ensure flux continuity and no negative pressures.
 - **Viscosity model**: start Newtonian with **Roelands** or **Barus** pressure–viscosity (choose one; document). Optionally, **Eyring shear‑thinning cap** if shear rates demand it (cap the shear stress at \(\tau_0\)).
-- **Density**: constant (if isoviscous‑incompressible), or simple pressure‑dependent if using compressible model; be consistent.
+- **Density**: pressure‑dependent  using compressible model; be consistent.
 - **Slip**: assume no‑slip unless justified by regime; if mixed, incorporate a **shear support** partition via asperity contact model.
 - **Roughness/Mixed term**: Use **Greenwood–Tripp** or **Patir–Cheng** flow factors **\(\Phi\)** for 1‑D (at minimum, pressure and shear flow factors). If unavailable, start with **Patir–Cheng** approximations calibrated **from literature only** (not to target data).
 
