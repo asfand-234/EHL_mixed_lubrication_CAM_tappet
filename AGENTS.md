@@ -10,3 +10,4 @@ For your help there is a sample in respository named "sample_comsol_API". Do not
 4) Remember: COMSOL does not support any descrete array. So your script must be as per comsol available settings and syntax. Include a_tex data set and cam lift in interpolation tables in comsol.  
 
 5) make sure to implement accaurate kinematics/dynamics and moxed lubrication relations and time steps as per code to get exact same results.
+6) At the end run comsol java script and verify whether it is giving correct results are not. if not then fix it.
