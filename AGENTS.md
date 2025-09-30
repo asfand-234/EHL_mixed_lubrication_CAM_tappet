@@ -1,21 +1,22 @@
-1) Read text file "MAIN_SCRIPT.txt" which calculates the percentage reduction of averaged friction torque with respect to untextured. It is about friction reduction due to textures/grooves in CAM and textured shim (inside bucket tappet) using 1D mixed lubrication theory. And a Cam lift data file named "CamAngle_vs_Lift_smooth.txt". 
+1) Read text file "MAIN_SCRIPT.txt" which python code that calculates the percentage reduction of averaged friction torque with respect to untextured. It is about friction reduction due to textures/grooves in CAM and textured shim (inside bucket tappet) using 1D mixed lubrication theory.
+And a Cam lift data file named "CamAngle_vs_Lift_smooth.txt". 
 The current script uses a mathemtical model of textures with fixed parameters and compute entire reynolds equation solution and calculate % averaged friction torque reduction.
-Only 1 parameter in texture model is not fixed i.e. a_tex (amplitude). The code takes 3 files as input ""amplitude_5_percent.txt", "amplitude_8_percent.txt", and "amplitude_10_percent.txt". 
-But the current results are not as per target results.
-The target results are given as,
- TARGET RESULTS:
-RPM    10_percnt        
-300     3.4%                
-500    10.71%            
-700    9.4%         
-900    6.87%      
-2) Your task is only tune the data set of ""amplitude_10_percent.txt" file in each cell of each column to meet at least 85% same target results for only 10%. Do not tune other file data just focus on 10% results for all RPM.
-3) IMPLEMENTATION STRATEGY:
-Start with first case, like in amplitude 10 percent in 300 column, now tune every random values in different cells  and run the entire simulation and focus only on results of % reduction of averaged friction torque for 10% at 300 RPM. Keep tuning  every value in entire column perform different treatments and understand the behaviour once you achieved at least 85% same target results. Then move to next column like amplitude 10 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 85% same a target results 
-4) Deliverables:
-Only and only once the codex achieve target then generate the updated amplutude data file of 10% only. 
-Do not print any other results to me other than final 8% ampliude file.
-5) HARD STRICT RULES:
-i) *DO NOT* put any calibration/fitting/non-physical scaling in script, rather it must only tuning each value in amplitude data set to meet the target.
-ii) *DO NOT* make any single change or do not add any factor in any physics in entire code.
-iii) Yo have to tune every single value in each column and row where necessary of ONLY 10% amplitude file and run the entire simulation every time and compare only with 10% target results.
+2) Your task is to convert entire code/script "MAIN_SCRIPT.txt" into MATLAB language/syntax and preserving all physics and results same. Make sure there must no any error and MALTAB must give the same results as the current code.
+
+3) Also add a new section in script that must control the graphs plotting when i run code in MATLAB. 
+It should,
+I) plot reynolds pressure p vs x axis.
+With following settings must be available in script so i can change manually like,
+Cam angle = 1 [degree], 2, 3 .. (so that wether i want to plot profile for single cam angle or multiple cam angles in single graph)
+RPM = 300, 500,......  (so that wether i want to plot profile for single RPM or multiple RPMs in single graph)
+Surface State = 1, 0  [for textured = 1, for untextured = 0] (must be flexible so rhat wether i want to keep to plot only textured or both)
+
+II) film thickness vs x axis. ( the same manual settings options must be available in script as mentioned for reynolds pressure).
+
+III) Hydrodynamic friction Fh vs cam angles.. (same all settings must be available as mentioned above cases except "cam angle option).
+IV) Asperity friction Fb vs cam angle.(same all settings must be available as mentioned above cases except "cam angle option).
+V) Friction Torque T vs cam angle. (same all settings must be available as mentioned above cases except "cam angle option). 
+
+4) All sections in MATLAB script must be clearly and precisly presented with necessary comments inside script. Make the plots more asthetic and professional
+
+Deliverable: Once you sure your MATLAB code is error free then generate only complete script
