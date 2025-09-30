@@ -1,3 +1,2 @@
 INSTRUCTIONS 
-Do not perform any test/iteration.Just upload your last updated tuned three files of Amplitude (for 5%, 8% and 10%l) that you were updating in every iteration. It does not matter whether they are completly perfect for all targets.
-Just Go back to your previous session data, and take all data set of all three updated tuned files and upload here.
+Just once again repeat only your last iteration of tuning amplitude file data (which you were tuning in last session). Do not worry about whether it meet the target or not. Just re-iterate with your last working. And then generate your updated three files of Amplitudes (till that you had tuned in your last session) and the MAIN_SCRIPT.
