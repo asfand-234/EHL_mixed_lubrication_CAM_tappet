@@ -9,9 +9,9 @@ RPM    5_percnt
 500    6.12%            
 700    4.21%         
 900    18.33%      
-2) Your task is only tune the data set of ""amplitude_8_percent.txt" file in each cell of each column to meet at least 85% same target results for only 8%. Do not tune other file data just focus on 8% results for all RPM.
+2) Your task is only tune the data set of ""amplitude_8_percent.txt" file in each cell of each column to meet at least 90% same target results for only 8%. Do not tune other file data just focus on 8% results for all RPM.
 3) IMPLEMENTATION STRATEGY:
-Start with first case, like in amplitude 8 percent in 300 column, now tune every random values in different cells  and run the entire simulation and focus only on results of % reduction of averaged friction torque for 8% at 300 RPM. Keep tuning  every value in entire column perform different treatments and understand the behaviour once you achieved at least 85% same target results. Then move to next column like amplitude 8 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 85% same a target results 
+Start with first case, like in amplitude 8 percent in 300 column, now tune every random values in different cells  and run the entire simulation and focus only on results of % reduction of averaged friction torque for 8% at 300 RPM. Keep tuning  every value in entire column perform different treatments and understand the behaviour once you achieved at least 85% same target results. Then move to next column like amplitude 8 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 90% same a target results 
 4) Deliverables:
 Only and only once the codex achieve target then generate the updated amplutude data file of 8% only. 
 Do not print any other results to me other than final 8% ampliude file.
