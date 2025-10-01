@@ -1,8 +1,16 @@
-import numpy as np, matplotlib.pyplot as plt, pandas as pd
+import os
+import numpy as np, pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+os.makedirs("/workspace/outputs", exist_ok=True)
 from numpy.fft import rfft, irfft
 
 # ---------------- Data ----------------
-data = np.loadtxt("/mnt/data/CamAngle_vs_Lift_smooth.txt")
+try:
+    data = np.loadtxt("/workspace/CamAngle_vs_Lift_smooth.txt")
+except Exception:
+    data = np.loadtxt("/mnt/data/CamAngle_vs_Lift_smooth.txt")
 th_deg = data[:,0]; lift = data[:,1]
 th = np.deg2rad(th_deg)
 dId = np.gradient(lift, th); d2Id = np.gradient(dId, th)
@@ -21,6 +29,19 @@ rho0 = 858.44
 alpha_p = 15e-9
 mu_b = 0.12
 
+# ---------------- Texture parameters ----------------
+# Gaussian groove amplitude and width
+a_texture = 5e-6
+w_texture = 35e-6
+
+# Center-to-center groove spacing for texture area densities (fraction)
+TEXTURE_SPACING_MAP = {0.05: 1.6e-3, 0.08: 1.2e-3, 0.10: 0.96e-3}
+
+def texture_spacing_for_density(density_fraction):
+    if density_fraction not in TEXTURE_SPACING_MAP:
+        raise ValueError("Unsupported texture density. Use one of 0.05, 0.08, 0.10")
+    return TEXTURE_SPACING_MAP[density_fraction]
+
 def eta_houpert(p): return np.maximum(eta0*np.exp(np.clip(alpha_p*np.maximum(p,0.0),0,23.0)), 1e-7)
 eta_inf=0.1*eta0; lam_c=2e-6; n_c=0.80
 def eta_carreau(etaN,h,Vs):
@@ -32,6 +53,44 @@ def gamma_eyr():
     g=(-5.0662 + 8.8630*(log(eta3))**(-0.07662) + 0.0312*(ASTM**3.3611)*(log(eta3))**(-0.6271) - 0.1189*(log(eta3))**(-5.4743)*(rho0_local)**(-23.5841))/100.0
     return max(g,0.0)
 gamma_lim = gamma_eyr()
+
+def compute_shift_array(Vf, th, w):
+    N = len(th)
+    shift = np.zeros(N)
+    if N <= 1:
+        return shift
+    dt_arr = np.diff(th)/(w + 1e-30)
+    # Left rule integration for robustness
+    for i in range(1, N):
+        shift[i] = shift[i-1] + Vf[i-1] * dt_arr[i-1]
+    return shift
+
+def build_htex(x, a, shift, d_texture, amplitude, width):
+    # Restrict texture to contact window [-a, a]
+    if a <= 0.0:
+        return np.zeros_like(x)
+    x_min = -a; x_max = a
+    # Enumerate groove centers that could intersect contact window
+    # Centers in the cam frame: c_k = k*d_texture - shift
+    half_w = 0.5*width
+    k_min = int(np.floor((x_min - half_w + shift) / (d_texture + 1e-30)))
+    k_max = int(np.ceil((x_max + half_w + shift) / (d_texture + 1e-30)))
+    sigma = width / (2.0*np.sqrt(2.0*np.log(2.0)))  # interpret width as FWHM
+    htex = np.zeros_like(x)
+    for k in range(k_min, k_max + 1):
+        c = k * d_texture - shift
+        # Only consider grooves whose core intersects contact window
+        if c < (x_min - half_w) or c > (x_max + half_w):
+            continue
+        dx = x - c
+        contrib = amplitude * np.exp(-0.5 * (dx / (sigma + 1e-30))**2)
+        # Zero out contribution outside the physical groove width to respect lands
+        contrib[np.abs(dx) > half_w] = 0.0
+        htex += contrib
+    # Enforce zero texture outside [-a, a]
+    mask_contact = (np.abs(x) <= a)
+    htex = np.where(mask_contact, htex, 0.0)
+    return htex
 
 def kin(rpm):
     w=2*np.pi*rpm/60.0
@@ -64,18 +123,30 @@ def rusanov_div_bc(u, q, dx, q_in_left, q_in_right):
     return (F[1:] - F[:-1])/(dx + 1e-30)
 
 def solve_theta(R, Ve, Vs, W, dt, h_prev=None, phi_in=0.5,
-                Nx=201, iters=12, substep_cap=12, relax_p=0.5, relax_h=0.5, theta_deg=0.0):
+                Nx=201, iters=12, substep_cap=12, relax_p=0.5, relax_h=0.5, theta_deg=0.0,
+                texture=None):
     R=float(max(R,1e-12)); W=float(max(W,1.0))
     a=max(a_hertz(W,R),2e-6)
     xL,xR=-4.5*a,3.0*a; x=np.linspace(xL,xR,Nx); dx=x[1]-x[0]
 
+    # Build texture field once per angle (moves with shift via texture dict)
+    htex = np.zeros_like(x)
+    if texture is not None and texture.get("enabled", False):
+        d_tex = float(texture.get("d", 0.0))
+        amp_tex = float(texture.get("amp", 0.0))
+        w_tex = float(texture.get("width", 0.0))
+        shift_tex = float(texture.get("shift", 0.0))
+        if d_tex > 0.0 and amp_tex > 0.0 and w_tex > 0.0:
+            htex = build_htex(x, a, shift_tex, d_tex, amp_tex, w_tex)
+
     if h_prev is None:
         hc = 180e-9
-        h = np.maximum(hc + x**2/(2*R), 5e-9)
+        h = np.maximum(hc + x**2/(2*R) + htex, 5e-9)
         G = phi_in*h
     else:
         xp=np.linspace(xL,xR,len(h_prev))
         h = np.maximum(np.interp(x,xp,h_prev), 5e-9)
+        h = np.maximum(h + htex, 5e-9)
         G = phi_in*h
 
     p=np.zeros(Nx); core=np.abs(x)<=a
@@ -114,6 +185,8 @@ def solve_theta(R, Ve, Vs, W, dt, h_prev=None, phi_in=0.5,
                 wfac=A[i]/(B[i-1]+1e-30); B[i]-=wfac*C[i-1]; RHS[i]-=wfac*RHS[i-1]
             p_new=np.zeros(Nx); p_new[-1]=RHS[-1]/(B[-1]+1e-30)
             for i in range(Nx-2,-1,-1): p_new[i]=(RHS[i]-C[i]*p_new[i+1])/(B[i]+1e-30)
+            # Enforce zero pressure outside Hertzian contact [-a, a]
+            p_new[~core] = 0.0
 
             Wh_trial = np.trapz(np.maximum(p_new,0.0), x)*L
             s = 1.0
@@ -124,7 +197,7 @@ def solve_theta(R, Ve, Vs, W, dt, h_prev=None, phi_in=0.5,
             press = p>0
             G = np.clip(np.where(press, h, G), 0.0, h)
             defl = elastic_deflection(x, p)
-            h = np.maximum((1-relax_h)*h + relax_h*( (180e-9) + x**2/(2*R) + defl ), 5e-9)
+            h = np.maximum((1-relax_h)*h + relax_h*( (180e-9) + x**2/(2*R) + defl + htex ), 5e-9)
 
     eta_eff=eta_carreau(eta_houpert(p),h,Vs)
     tau=np.minimum(np.where(h>1e-12, eta_eff*np.abs(Vs)/h, 0.0), gamma_lim * p)
@@ -142,46 +215,7 @@ def solve_theta(R, Ve, Vs, W, dt, h_prev=None, phi_in=0.5,
 
     return x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid
 
-# 500 RPM run
-rpm=500
-w,R,Ve,Vs,W = kin(rpm)
-dt = float(np.mean(np.diff(th))/(w + 1e-30))
-
-idxs = np.arange(0, len(th), 6)
-FhL=[]; FbL=[]; TqL=[]; ResL=[]
-h_prev=None
-for i in idxs:
-    x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[i],Ve[i],Vs[i],W[i],dt,
-                                                                 h_prev,phi_in=0.5,
-                                                                 Nx=221,iters=12,substep_cap=12,
-                                                                 relax_p=0.5,relax_h=0.5,theta_deg=th_deg[i])
-    FhL.append(Fh); FbL.append(Fb); TqL.append((Fh+Fb)*(rb+lift[i])); ResL.append(resid)
-    h_prev=h
-
-plt.figure(); plt.plot(th_deg[idxs], FhL); plt.xlabel("θ (deg)"); plt.ylabel("Hydrodynamic friction (N)"); plt.title("Hydrodynamic friction vs θ (500 RPM) — dimensional balance"); plt.grid(True)
-plt.figure(); plt.plot(th_deg[idxs], FbL); plt.xlabel("θ (deg)"); plt.ylabel("Boundary friction (N)"); plt.title("Boundary friction vs θ (500 RPM)"); plt.grid(True)
-plt.figure(); plt.plot(th_deg[idxs], TqL); plt.xlabel("θ (deg)"); plt.ylabel("Friction torque (N·m)"); plt.title("Total friction torque vs θ (500 RPM)"); plt.grid(True)
-plt.figure(); plt.plot(th_deg[idxs], ResL); plt.xlabel("θ (deg)"); plt.ylabel("Residual = ∫P dX + Pa_bar − W*"); plt.title("Diagnostic residual (no factor-2) — 500 RPM"); plt.grid(True)
-
-# Pressure profiles at θ = −34°, 0°, +20°
-def pressure_profiles_at(rpm, degs, Nx=301):
-    w,R,Ve,Vs,W = kin(rpm)
-    dt = float(np.mean(np.diff(th))/(w + 1e-30))
-    out=[]
-    for ang in degs:
-        k = int(np.argmin(np.abs(th_deg - ang)))
-        x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[k],Ve[k],Vs[k],W[k],dt,
-                                                                     None,phi_in=0.5,
-                                                                     Nx=Nx,iters=14,substep_cap=14,
-                                                                     relax_p=0.5,relax_h=0.5,theta_deg=th_deg[k])
-        out.append((ang,x,p,X,P))
-    return out
-
-for ang,xp,pp,Xd,Pd in pressure_profiles_at(500, [-34.0, 0.0, 20.0], Nx=301):
-    plt.figure(); plt.plot(xp*1e3, pp/1e6); plt.xlabel("x (mm)"); plt.ylabel("p (MPa)"); plt.title(f"Dimensional pressure at θ={ang:.0f}° (500 RPM)"); plt.grid(True)
-    plt.figure(); plt.plot(Xd, Pd); plt.xlabel("X=x/a"); plt.ylabel("P=p/ph"); plt.title(f"Nondim P at θ={ang:.0f}° (500 RPM)"); plt.ylim([0,1.3]); plt.grid(True)
-
-# Averages table
+# Utility: average torque over sparse angles (baseline/untextured)
 def avg_cycle(rpm):
     w,R,Ve,Vs,W = kin(rpm); dt=float(np.mean(np.diff(th))/(w+1e-30))
     idxs=np.arange(0,len(th),10); h_prev=None; Tqs=[]
@@ -189,15 +223,93 @@ def avg_cycle(rpm):
         x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[i],Ve[i],Vs[i],W[i],dt,
                                                                      h_prev,phi_in=0.5,
                                                                      Nx=181,iters=10,substep_cap=12,
-                                                                     relax_p=0.5,relax_h=0.5,theta_deg=th_deg[i])
+                                                                     relax_p=0.5,relax_h=0.5,theta_deg=th_deg[i],
+                                                                     texture=None)
         Tqs.append((Fh+Fb)*(rb+lift[i])); h_prev=h
     return float(np.mean(Tqs))
 
-rows=[[300, avg_cycle(300)],
-      [500, avg_cycle(500)],
-      [700, avg_cycle(700)],
-      [900, avg_cycle(900)]]
-df=pd.DataFrame(rows, columns=["RPM","Average friction torque (N·m)"])
-from caas_jupyter_tools import display_dataframe_to_user
-display_dataframe_to_user("Cycle-averaged friction torque (dimensional balance, refined)", df)
+# Texture-aware average torque
+def avg_cycle_textured(rpm, density):
+    w,R,Ve,Vs,W = kin(rpm); dt=float(np.mean(np.diff(th))/(w+1e-30))
+    d_tex = texture_spacing_for_density(density)
+    shift_arr = compute_shift_array(Vf=Vf_global[rpm], th=th, w=w)
+    idxs=np.arange(0,len(th),10); h_prev=None; Tqs=[]
+    for i in idxs:
+        tex = {"enabled": True, "d": d_tex, "amp": a_texture, "width": w_texture, "shift": float(shift_arr[i])}
+        x,h,p,Fh,Fb,Wh,Wa,a,ph,X,P,W_star,Pa_bar,resid = solve_theta(R[i],Ve[i],Vs[i],W[i],dt,
+                                                                     h_prev,phi_in=0.5,
+                                                                     Nx=181,iters=10,substep_cap=12,
+                                                                     relax_p=0.5,relax_h=0.5,theta_deg=th_deg[i],
+                                                                     texture=tex)
+        Tqs.append((Fh+Fb)*(rb+lift[i])); h_prev=h
+    return float(np.mean(Tqs))
+
+# Precompute follower velocities by RPM for shift integration
+Vf_global = {}
+for rpm_pre in [300,500,700,900]:
+    w_pre, R_pre, Ve_pre, Vs_pre, W_pre = kin(rpm_pre)
+    Vf_global[rpm_pre] = w_pre*d2Id  # same as kin uses
+
+# Test (a): texture coverage metric vs cam angle @ 300 RPM, 8%
+rpm_test = 300; density_test = 0.08
+w_test, R_test, Ve_test, Vs_test, W_test = kin(rpm_test)
+d_test = texture_spacing_for_density(density_test)
+shift_test = compute_shift_array(Vf=Vf_global[rpm_test], th=th, w=w_test)
+
+coverage_metric = []  # integral of htex over contact window
+a_arr = a_hertz(np.maximum(W_test,0.0), np.maximum(R_test,1e-12))
+for i in range(len(th)):
+    a_i = max(float(a_arr[i]), 2e-6)
+    x_i = np.linspace(-4.5*a_i, 3.0*a_i, 221)
+    htex_i = build_htex(x_i, a_i, float(shift_test[i]), d_test, a_texture, w_texture)
+    # metric over [-a_i, a_i]
+    mask = (np.abs(x_i) <= a_i)
+    coverage_metric.append(float(np.trapz(htex_i[mask], x_i[mask])))
+
+coverage_metric = np.array(coverage_metric)
+plt.figure(); plt.plot(th_deg, coverage_metric*1e6)
+plt.xlabel("θ (deg)"); plt.ylabel("∫ htex dx within |x|≤a (µm·m)")
+plt.title("Texture coverage metric vs θ (300 RPM, 8% density)"); plt.grid(True)
+plt.tight_layout(); plt.savefig("/workspace/outputs/coverage_metric_300rpm_8pct.png", dpi=200)
+
+# Pick an angle with maximum coverage for tests (b) and (c)
+k_tex = int(np.argmax(coverage_metric))
+
+# Solve with texture at this angle for detailed profiles
+x_t,h_t,p_t,Fh_t,Fb_t,Wh_t,Wa_t,a_t,ph_t,X_t,P_t,W_star_t,Pa_bar_t,resid_t = solve_theta(R_test[k_tex],Ve_test[k_tex],Vs_test[k_tex],W_test[k_tex],
+                                                                                       float(np.mean(np.diff(th))/(w_test+1e-30)),
+                                                                                       None,phi_in=0.5,
+                                                                                       Nx=401,iters=14,substep_cap=14,
+                                                                                       relax_p=0.5,relax_h=0.5,theta_deg=th_deg[k_tex],
+                                                                                       texture={"enabled": True, "d": d_test, "amp": a_texture, "width": w_texture, "shift": float(shift_test[k_tex])})
+
+# Test (b): pressure vs x at the selected angle
+plt.figure(); plt.plot(x_t*1e3, p_t/1e6)
+plt.xlabel("x (mm)"); plt.ylabel("p (MPa)")
+plt.title(f"Pressure at θ={th_deg[k_tex]:.1f}° (300 RPM, 8% density)"); plt.grid(True)
+plt.tight_layout(); plt.savefig("/workspace/outputs/pressure_profile_300rpm_8pct.png", dpi=200)
+
+# Test (c): film thickness vs x at the selected angle
+plt.figure(); plt.plot(x_t*1e3, h_t*1e9)
+plt.xlabel("x (mm)"); plt.ylabel("h (nm)")
+plt.title(f"Film thickness at θ={th_deg[k_tex]:.1f}° (300 RPM, 8% density)"); plt.grid(True)
+plt.tight_layout(); plt.savefig("/workspace/outputs/film_thickness_300rpm_8pct.png", dpi=200)
+
+# Test (d): torque reduction vs untextured across RPMs and densities
+rpms = [300,500,700,900]
+densities = [0.05, 0.08, 0.10]
+rows = []
+for r in rpms:
+    Tq_un = avg_cycle(r)
+    for d in densities:
+        Tq_tex = avg_cycle_textured(r, d)
+        reduction = 100.0 * max(Tq_un - Tq_tex, 0.0) / (Tq_un + 1e-30)
+        rows.append([r, d, Tq_un, Tq_tex, reduction])
+
+df = pd.DataFrame(rows, columns=["RPM", "Texture density", "Tq untextured (N·m)", "Tq textured (N·m)", "% reduction"])
+try:
+    from caas_jupyter_tools import display_dataframe_to_user
+    display_dataframe_to_user("Torque reduction vs untextured (cycle-averaged)", df)
+except Exception:
+    pass
 print(df)
