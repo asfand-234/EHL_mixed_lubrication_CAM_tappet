@@ -103,9 +103,9 @@ def eta_carreau(etaN,h,Vs):
 # ---------- Kinematics at RPM ----------
 def kin(rpm):
     w = 2*np.pi*rpm/60.0
-    R  = np.abs(rb + lift + d2lift)      # surrogate local radius [m]
     Vf = w*d2lift                        # follower surface speed [m/s]
     Vc = w*(rb + lift + d2lift)          # cam surface speed [m/s]
+    R = Vc/w
     Ve = 0.5*(Vc + Vf)                   # mean entrainment [m/s]
     Vs = np.abs(Vc - Vf)                 # sliding [m/s]
     W  = k_spring*(lift + delta) + Meq*(w**2)*d2lift  # normal load [N]
@@ -586,3 +586,4 @@ def run_all_plots():
 # ---- Run everything ----
 if __name__ == "__main__":
     run_all_plots()
+
