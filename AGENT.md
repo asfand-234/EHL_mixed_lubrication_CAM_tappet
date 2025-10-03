@@ -1,27 +1,28 @@
-1) codex should read text file "MAIN_SCRIPT.txt" which calculates the percentage reduction of averaged friction torque with respect to untextured. It is about friction reduction due to textures/grooves in CAM and textured shim (inside bucket tappet) using 1D mixed lubrication theory.
-And a Cam lift data file named "CamAngle_vs_Lift_smooth.txt". 
-The current script uses a mathemtical model of textures with fixed parameters and compute entire reynolds equation solution and calculate % averaged friction torque reduction.
+Read my "python_one.txt" code and deeply analyze. It has two main sections. Physics section and Plot control sections. Changed are required in Physics section only. This code is about friction torque calculation in CAM and flat follower using 1D mixed lubrication line contact theory.
+The cam lift data is "CamAngle_vs_Lift_smooth.txt" and three texture amplitude files are also given in repository. 
 
-Only 1 parameter in texture model is not fixed i.e. a_tex (amplitude). The code takes 3 files as input ""amplitude_5_percent.txt", "amplitude_8_percent.txt", and "amplitude_10_percent.txt". 
-But the current results are not as per target results.
-The target results are given as,
+TASK:
+1) convert the Reynolds equation into non-dimensional form using standard EHL theory scaling. All the imput variablesof Reynolds equation would be first non-dimensionalized before using in Reynolds solver. X = x/b,  where x domain is -4.5*b to 3*b so X  would be -4.5 to 3,
+ H = (h*R)/ph, ETA = eta/eta0, RHO= rho/rho0, V = Ve/v_ref (chose a suitable v_ref, that meet all criteria). When you use dimensional pressure in other models like load balance criteria (below discussed), viscosity, density and friction models then, reconvert non-dimensional P into dimensional p using scaling p = P*ph. Where ph = hertzian pressure. 
+2) A very simplified reynolds equation was used which is not suitable for CAM tappet mechanism. Include standard DOWSON & HIGGINSON pressure dependent density model correctly.
+3) Instead of simple calculation of asperity load wa, implement standard Greenwood and Tripp statistical model and calculate asperity friction Fb.
+combined RMS = sigma = 0.2e-6 m
+Average asperity tip radius = beta_a = 2e-4 average summit radius =  k = 2e-4 
+Asperity distribution per unit area = eta_R = 1.25e9
 
- TARGET RESULTS:
-RPM    5_percnt     8_percnt    10_percnt
-300     3.4%             7.95%         3.4%
-500    6.12%           8.92%         10.71%
-700    4.21%           14.11%        9.4%
-900    18.33%         11.91%        6.87%
+4) instead of simple load balance criteria now implement mixed lubrication standard load balance criteria i.e. (Wh + wa)- W = 0. From this load balance criteria you will get h0 (initial film thickness). You can take help from "reference_article.pdf" and also from relevant web sources.
 
+IMPORTANT INSTRUCTIONS:
+1) The load balance criteria must meet upto least relative error. If criteria does not meet or convergenve issuee occur then:
+  i)) adjust h0 intial value
+  ii) Tune/calibrate above roughness parameter values but the product of (sigma*beta_a*eta_R) must remain about 0.05 and ratio of (sigma/beta_a) must remain about 0.001. 
+  iii) implement damping factor and under-relaxation factor. Do not add any unnecessary factors.
+  iv) Improve Cavitation model and stabilization in reynolds solution.
+  v) implement any other necessary change which must be as per relevant standard literature.
 
-2) codex must only tune the data set of each amplitude file in each cell of each column to meet at least 85% same target results. 
-
-3) Implementation strategy:
-Start with first case, like in amplitude 5 percent in 300 column, now tune every random values in different cells and run the entire simulation and focus only on results of % reduction of averaged friction torque for 5% at 300 RPM. Keep tuning values in entire column and understand the behaviour once you achieved at least 85% same targer results. Then move to next column like amplitude 5 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 85% same a target results 
-4) Deliverables:
-Only and only once the codex achieve target then generate three updated amplutude data files. 
-Do not print any other results to me other than final script.
-5) Hard Strict Rule
-i)Codex must never do any calibration/fitting/non-physical scaling. Codex never do any surrogation or regression, rather it must only tune each value in amplitude data set to meet the target.
-ii) Do not make any single change in any physics in entire code.
-iii) You must have to tune every single value in each column of all three amplitude files and run the entire simulation every time.
+TESTING:
+1) Make sure The reynolds equation perfectly converged with highest accuracy and has perfect standard profile (like dome shape) on contact zone (-1 to 1) and away from it (towards boundaries) pressure must be zero. 
+2) The magnitude of non-dimensional reynolds pressure profile remain 0 to 1 as per theory. So make sure you are in right path.
+- Always run `pnpm lint` and `pnpm test` before committing.
+DELIVERABLE:
+Once you achieved above all tasks and meet the requirements then generate only and only full complete error free updated code (ready to paste for google colab) with my Plot control section (unchanged).
