@@ -24,7 +24,7 @@ v) implement any other necessary change which must be as per relevant standard l
 3) The magnitude of non-dimensional reynolds pressure profile remain 0 to 1 as per theory. So make sure you are in right path.
 
 TESTING:
-AFTER MAKING ABOVE CHANGES, MUST THE RUN THE ENTIRE SIMULATION AND OBSERVE THE CONVERGENCE AND LOAD BALANCE ERROR, THE MAGNITUDE OF NO-DIMENSIONAL REYNOLDS PRESSURE VS X AXIS (STAY FROM 0 TO 1 AS PER THEORY). IF NON OF THESE CRITERIA MEET THEN START IMPROVING ALL PHYSICS TO GET DESIRED RESULTS.
+AFTER MAKING ABOVE CHANGES, MUST RUN THE ENTIRE SIMULATION AND OBSERVE THE CONVERGENCE AND LOAD BALANCE ERROR, THE MAGNITUDE OF NO-DIMENSIONAL REYNOLDS PRESSURE VS X AXIS (STAY FROM 0 TO 1 AS PER THEORY). IF NON OF THESE CRITERIA MEET THEN RE-START IMPROVING ALL PHYSICS TO GET DESIRED RESULTS.
 
 DELIVERABLE:
 Once you achieved above all tasks and meet the requirements then generate only and only full complete (not missing lines or no elipses) error free updated code (ready to paste for google colab) with my Plot control section (unchanged).
