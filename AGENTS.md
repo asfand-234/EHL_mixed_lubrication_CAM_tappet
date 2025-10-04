@@ -1,30 +1,30 @@
-Read my "python_six.txt" code and deeply analyze it. It has two main sections. Physics section and Plot control section. This code is about friction torque calculation in CAM and flat follower using 1D mixed lubrication line contact theory.
-The cam lift data is "CamAngle_vs_Lift_smooth.txt" and three texture amplitude files are also given in repository
+*Read* text file "python_eight.txt" code which calculates the percentage reduction of averaged friction torque with respect to untextured. It is about friction reduction due to textures/grooves in CAM and textured shim (inside bucket tappet) using 1D mixed lubrication theory. And a Cam lift data file named "CamAngle_vs_Lift_smooth.txt". 
+The current script uses a mathemtical model of textures with fixed parameters and compute entire reynolds equation solution and calculate % averaged friction torque reduction.
+Only 1 parameter in texture model is not fixed i.e. a_tex (amplitude). The code takes 3 files as input ""a_texture_data_5pct.txt", "a_texture_data_8pct.txt", and "a_texture_data_10pct.txt". 
 
-Changes are required in Physics section only. Do not change my plot section.
+**PROBLEM:**
+The current results for 5% texture case are not as per target results.
 
-PROBLEMS:
-The current code has two main issues:
-1) Asperity load "Wa" values are too small and profile is not correct.
-2) The averaged friction Torque values for all RPMs are small and not following target experimental trends.
-TARGET VALUES (for averaged friction torque):
-RPM       Avg Friction Torque
-300         0.08845
-500         0.07849
-700         0.06598
-900         0.06381
+**TARGET RESULTS:**
+The target results are given as,
+RPM    5_percnt        
+300      3.4%                
+500     6.12%            
+700      4.21%         
+900      18.33%      
 
-And The asperity load must be greater than 10. 
+**TASK:**
+Your task is only tune/calibrate the data set of ""a_texture_data_5pct.txt" file in non-zero cells only of each column of RPM to meet at least 85% same target results for only 5%. Do not tune other file data just focus on 5% results for all RPMs.
 
-TASKS:
-Your tasks as a highly professional engineering and programming agent are,
-1) Improve the asperity load calculation model. Make sure it must be as per standard literature. Make sure its scaling and variables are correctly linked and defined. 
-2) Tune/calibrate the roughness parameters values but the product of (sigma*beta_a*eta_R) must remain around 0.05 and ratio of (sigma/beta_a) must remain around 0.001.
-3) Make sure, hydrodynamic friction and asperity frictions are accurately calculated because, the averaged friction torque values must show decreasing trend from 300 RPM to 900 RPM. Do not change formula of asperity friction rather focus on asperity load formula.
-4) Any other physics which need to be adjusted then do it.
+**IMPLEMENTATION STRATEGY:**
+Start with first case, like in amplitude 5 percent in 300 column, now tune every random non-zeros cell values in different and run the entire simulation and focus only on results of % reduction of averaged friction torque for 5% at 300 RPM. Keep tuning every value in entire column perform different treatments and understand the behaviour once you achieved at least 85% same target results. Then move to next column like amplitude 5 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 85% same a target results 
 
-CRITERIA:
-Keep improving physics and printing results of asperity load and averaged friction torque if results do not meet with target then again start improving tasks from 1 to 4 until you meet at least 85% same target results.
+**HARD STRICT RULES:**
+i) DO NOT make changes in zero cells, only calibrate values of non-zeros cells. And *STRICTLY* the calibration only allowed greater then 0 and less than 7e-6.
+ii) DO NOT put any calibration/fitting/non-physical scaling in script, rather must only tune/calibrate non-zero cells values in each column to meet the target.
+iii) DO NOT make any single change or do not add any factor in any physics in entire code.
+iv) Run the entire simulation every time and compare your results with 10% target results.
 
-DEIVERABLE:
-Once you achieved target and performed final tests then only generate updated complete (without diff markers, missing lines, hidden lines or ellipses), error free ready to paste google colab script to me.
+**DELIVERABLES:**
+Only and only once the codex achieve target then generate the updated a_texture data file of 5% only. 
+Do not print any other results to me other than final 5% updated a_texture file.
