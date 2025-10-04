@@ -1,0 +1,697 @@
+# ============================================================
+# CAM–SHIM (Bucket Tappet) — 1D Mixed Lubrication w/ Line Textures
+# Ready-to-paste Google Colab script
+# ============================================================
+
+# =======================
+# USER: set data folder
+# =======================
+DATA_DIR = "/content/cam"   # <--- put your folder path here
+CAM_FILE = "CamAngle_vs_Lift_smooth.txt"
+ATEX_FILES = {
+    "5%":  "a_texture_data_5pct.txt",
+    "8%":  "a_texture_data_8pct.txt",
+    "10%": "a_texture_data_10pct.txt",
+}
+
+# ============================================================
+# Imports
+# ============================================================
+import os, numpy as np, pandas as pd
+import matplotlib.pyplot as plt
+from math import pi
+
+# Matplotlib defaults friendly for Colab
+plt.rcParams.update({"figure.dpi": 120})
+
+# ============================================================
+# Load cam data (angle [deg], lift [m]) and smooth it
+# ============================================================
+def _load_cam(data_dir, fname):
+    path = os.path.join(data_dir, fname)
+    _cam = pd.read_csv(
+        path, sep=r"\s+", engine="python", comment="#", header=None,
+        names=["angle_deg", "lift_m"], usecols=[0, 1]
+    )
+    _cam["angle_deg"] = pd.to_numeric(_cam["angle_deg"], errors="raise")
+    _cam["lift_m"]    = pd.to_numeric(_cam["lift_m"],    errors="raise")
+    return _cam.sort_values("angle_deg").reset_index(drop=True)
+
+CAM = _load_cam(DATA_DIR, CAM_FILE)
+th_deg = CAM["angle_deg"].to_numpy(dtype=float)
+th     = np.deg2rad(th_deg)
+lift   = CAM["lift_m"].to_numpy(dtype=float)
+
+def _movavg(x, k):
+    k = int(max(3, k)) | 1
+    w = np.ones(k)/k
+    return np.convolve(x, w, mode="same")
+
+lift_s   = _movavg(_movavg(_movavg(lift, 9), 21), 41)
+dlift_s  = np.gradient(lift_s, th)
+d2lift_s = np.gradient(dlift_s, th)
+
+# ============================================================
+# Materials / geometry / fluid (same as your original script)
+# ============================================================
+rb       = 18.5e-3      # base circle radius [m]
+k_spring = 7130.0       # spring rate [N/m]
+delta    = 1.77e-3      # preload [m]
+Meq      = 0.05733      # equivalent mass [kg]
+L        = 7.2e-3       # out-of-plane length [m]
+
+E_cam=209e9; E_tap=216e9; nu=0.30
+E_star = 1.0/((1-nu**2)/E_cam + (1-nu**2)/E_tap)
+
+# Fluid / rheology baseline
+eta0    = 0.01381       # Pa·s
+alpha_p = 15e-9         # 1/Pa
+mu_b    = 0.12          # boundary coeff
+rho0    = 858.44        # kg/m^3
+
+# Greenwood–Tripp constants (unchanged)
+sigma_combined = 0.265e-6
+beta_a         = 2.65e-4
+eta_R          = (0.05/(sigma_combined*beta_a))
+
+# Precompute GT kernel
+_gt_w = np.linspace(0.0, 8.0, 400)
+_gt_w_pow = _gt_w**1.5
+_gt_norm = np.sqrt(2.0*np.pi)
+_lam_grid = np.linspace(0.0, 6.0, 360)
+_kern = _gt_w_pow[None, :] * np.exp(-0.5 * (_lam_grid[:, None] + _gt_w) ** 2)
+_F32_lookup = np.trapz(_kern, _gt_w, axis=1) / _gt_norm
+_F32_lookup[-1] = 0.0
+
+# Eyring and viscosity laws
+def gamma_eyr():
+    log=np.log10; eta1,eta2,eta3=129.0,13.5,15.5; T1,T2=40.0,100.0; rho0_local=858.44
+    ASTM=(log((log(eta1+0.7))/(log(eta2+0.7))))/(T2/T1)
+    g=(-5.0662 + 8.8630*(log(eta3))**(-0.07662) + 0.0312*(ASTM**3.3611)*(log(eta3))**(-0.6271)
+       - 0.1189*(log(eta3))**(-5.4743)*(rho0_local)**(-23.5841))/100.0
+    return max(g,0.0)
+gamma_lim = gamma_eyr()
+
+def eta_houpert(p):
+    return np.maximum(eta0*np.exp(np.clip(alpha_p*np.maximum(p,0.0), 0, 23.0)), 1e-7)
+
+eta_inf = 0.05*eta0
+lam_c   = 1.5e-6
+n_c     = 0.65
+def eta_carreau(etaN,h,Vs):
+    gdot = np.where(h>1e-12, np.abs(Vs)/h, 0.0)
+    return np.maximum(eta_inf + (etaN-eta_inf)*(1+(lam_c*gdot)**2)**((n_c-1)/2), 1e-7)
+
+def rho_dowson_higginson(p):
+    p_eff = np.maximum(p, 0.0)
+    return rho0 * (1.0 + 0.6e-9 * p_eff) / (1.0 + 1.7e-9 * p_eff)
+
+# Greenwood–Tripp asperity pressure
+def asperity_pressure_greenwood_tripp(h):
+    lam = np.maximum(np.asarray(h, float)/(sigma_combined + 1e-18), 0.0)
+    lam_clipped = np.clip(lam, _lam_grid[0], _lam_grid[-1])
+    F32 = np.interp(lam_clipped, _lam_grid, _F32_lookup)
+    pref = (4.0/3.0) * E_star * np.sqrt(beta_a) * eta_R * (sigma_combined**1.5)
+    return (pref * F32).reshape(lam.shape)
+
+# Hamrock–Dowson central film estimate (seed)
+def central_film_thickness(R, W, Ve):
+    R = max(float(R), 1e-6)
+    W = max(float(W), 1.0)
+    U = (eta0 * np.abs(Ve))/(E_star * R + 1e-30)
+    G = alpha_p * E_star
+    W_star = W / (E_star * L * R + 1e-30)
+    hc = 2.69 * (U**0.67) * (G**0.53) * (W_star**-0.067) * R
+    return float(np.clip(hc, 40e-9, 600e-9))
+
+# Kinematics
+def kin_arrays(rpm):
+    w = 2*pi*rpm/60.0
+    Vc = w*(rb + lift_s + d2lift_s)
+    Vf = w*dlift_s
+    R  = np.abs(Vc / (w + 1e-30))
+    Ve = 0.5*(Vc + Vf)
+    Vs = np.abs(Vc - Vf)
+    W  = k_spring*(lift_s + delta) + Meq*(w**2)*d2lift_s
+    return R, Ve, Vs, W, w
+
+# Hertz line-contact
+def a_hertz(W,R):
+    return np.sqrt(np.maximum(2*np.maximum(W,0.0)*np.maximum(R,1e-12),0.0)/(np.pi*E_star*L + 1e-30))
+def ph_hertz(W,a):
+    return 2.0*np.maximum(W,0.0)/(np.pi*np.maximum(a,1e-12)*L + 1e-30)
+
+# Elastic deflection (simple O(N^2))
+def elastic_deflection(x, p):
+    x = np.asarray(x, float); p = np.asarray(p, float)
+    N  = len(x); dx = x[1]-x[0]; eps = 0.5*dx
+    u = np.zeros_like(x)
+    for i in range(N):
+        u[i] = np.sum(p * np.log(np.sqrt((x[i]-x)**2 + eps*eps))) * dx
+    u *= (2.0/(np.pi*E_star))
+    u -= np.mean(u)
+    return u
+
+# Rusanov advection for content transport (unchanged)
+def rusanov_div_bc(u, q, dx, q_in_left, q_in_right):
+    N=len(q)
+    qL = np.empty(N+1); qR = np.empty(N+1)
+    qL[1:] = q; qR[:-1] = q
+    qL[0] = q_in_left; qR[0] = q[0]
+    qL[-1] = q[-1];     qR[-1] = q_in_right
+    F = 0.5*(u*(qL+qR)) - 0.5*np.abs(u)*(qR - qL)
+    return (F[1:] - F[:-1])/(dx + 1e-30)
+
+# ============================================================
+# TEXTURE MODEL (theta-dependent amplitude from files)
+# ============================================================
+# Global texture shape params
+w_texture = 35e-6       # [m]
+g_val     = 1e-9        # [m]
+x_start   = 0.0
+X_in, X_out = -4.0, 3.0  # window scaling by a(theta)
+
+# d_texture per area density
+D_TEXTURE = {"5%": 700e-6, "8%": 437.5e-6, "10%": 350e-6}
+
+def _load_atex_tables(data_dir):
+    """Return dict: density -> DataFrame(angle_deg, RPM*)"""
+    tables = {}
+    for k, fn in ATEX_FILES.items():
+        path = os.path.join(data_dir, fn)
+        tbl = pd.read_csv(path, sep=r"\s+|\t+", engine="python")
+        # ensure sorted by angle
+        tbl = tbl.sort_values("angle_deg").reset_index(drop=True)
+        tables[k] = tbl
+    return tables
+
+ATEX_TABLES = _load_atex_tables(DATA_DIR)
+
+def atex_series_for_rpm(density_key, rpm):
+    """Get a_texture(theta) series (numpy) for given density and RPM col."""
+    df = ATEX_TABLES[density_key]
+    col = f"RPM{int(rpm)}"
+    if col not in df.columns:
+        raise ValueError(f"{density_key}: column {col} not found in {list(df.columns)}")
+    # Align with th_deg (assumes same angle grid)
+    if not np.allclose(df["angle_deg"].to_numpy(), th_deg, atol=1e-9):
+        # If grids differ, interpolate
+        return np.interp(th_deg, df["angle_deg"].to_numpy(), df[col].to_numpy())
+    return df[col].to_numpy(dtype=float)
+
+def integrate_shift(Vs, w):
+    """Shift(theta) with dShift/dt = Vs,  dt = dtheta/w."""
+    dtheta = np.gradient(th)
+    integrand = Vs/(w + 1e-30)
+    shift = np.zeros_like(integrand)
+    shift[1:] = np.cumsum(0.5*(integrand[1:] + integrand[:-1])*dtheta[1:])
+    return shift
+
+def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture):
+    """
+    Full texture profile at one theta (masked to [-a,a]).
+    Uses theta-dependent amplitude atex_theta from the file.
+    """
+    if atex_theta <= 0.0 or a_theta <= 0.0:
+        return np.zeros_like(x)
+
+    u = ((x - x_start - shift_theta + d_texture/2.0) % d_texture) - d_texture/2.0
+    expo = (np.log(g_val / atex_theta) * (u**2)) / (w_texture + 1e-30)
+    h = atex_theta * np.exp(expo)
+
+    # strictly mask to contact
+    return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
+
+# ============================================================
+# CORE SOLVER (per cam angle) — mixed lub with texture
+# ============================================================
+def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
+                atex_theta, shift_theta, d_texture,
+                Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
+                M_core=451, observe=True):
+    """
+    atex_theta: amplitude from file at this theta (0 if smooth land)
+    d_texture:  texture spacing for selected area density
+    """
+    R=float(max(R,1e-12)); W=float(max(W,1.0))
+    a  = max(a_hertz(W, R), 2e-6)
+    ph = max(ph_hertz(W, a), 1e3)
+
+    # Extended geometry window; pressure lives only in |x|<=a
+    xL, xR = X_in*a, X_out*a
+    x  = np.linspace(xL, xR, Nx)
+    dx = x[1] - x[0]
+
+    # Normalized core for pressure on [-a,a]
+    s  = np.linspace(-1.0, 1.0, int(M_core))
+    xs = a * s
+    dS = s[1] - s[0]
+
+    # Base film seed (Hamrock–Dowson)
+    h0 = central_film_thickness(R, W, Ve)
+
+    # ---------- TEXTURE contribution ----------
+    htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
+
+    # Initial film (include texture)
+    h  = np.maximum(h0 + x**2/(2*R) + htex, 5e-9)
+
+    # Content Φ = ρH
+    p_zero = np.zeros_like(x)
+    Phi = (rho_dowson_higginson(p_zero)/rho0) * ((h*R)/ph)
+    phi_in = 0.5
+    G = phi_in * Phi
+
+    # Seed a Hertzian-shaped core pressure
+    P_core = np.sqrt(np.maximum(1.0 - s**2, 0.0))
+
+    # Transport substepping (CFL)
+    u_nd = 1.0
+    dX   = dx / max(a, 1e-12)
+    cfl  = abs(Ve)*dt/(dx + 1e-30)
+    substeps = int(min(max(2, np.ceil(cfl/0.35)), substep_cap))
+    dts  = dt/max(substeps, 1)
+    dT   = dts * max(abs(Ve), 0.05) / max(a, 1e-12)
+
+    def embed_p(P_core_vec):
+        p_full = np.zeros_like(x)
+        inside = (x >= -a) & (x <=  a)
+        if inside.any():
+            P_vals = np.interp(x[inside], xs, np.maximum(P_core_vec, 0.0))
+            p_full[inside] = P_vals * ph
+        return p_full
+
+    # Gentle smoothing weights
+    K0, K1 = 0.55, 0.225
+
+    for _sub in range(substeps):
+        # Transport
+        p_tr   = embed_p(P_core)
+        rho_nd = rho_dowson_higginson(p_tr)/rho0
+        H_nd   = (h * R) / ph
+        Phi    = rho_nd * H_nd
+        G_in_L = phi_in*Phi[0]; G_in_R = phi_in*Phi[-1]
+        div_phi = rusanov_div_bc(u_nd, G, dX, G_in_L, G_in_R)
+        S_nd = (Phi - G)/max(dT, 1e-12) + div_phi
+        S_core_nd = np.interp(xs, x, S_nd)
+
+        for _it in range(iters):
+            # Diffusion ND on core (pressure >= 0 ensured)
+            p_embed = embed_p(P_core)
+            rho_nd  = rho_dowson_higginson(p_embed)/rho0
+            H_nd    = (h * R) / ph
+            eta_nd  = eta_houpert(p_embed)/eta0
+
+            rho_core = np.interp(xs, x, rho_nd)
+            H_core   = np.interp(xs, x, H_nd)
+            eta_core = np.interp(xs, x, np.maximum(eta_nd, 1e-7))
+            D_core   = np.maximum(rho_core * H_core**3 / eta_core, 1e-12)
+
+            # Tridiagonal assembly (Dirichlet p=0 at ±a via P_core[0]=P_core[-1]=0)
+            M = len(xs)
+            A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
+            invdS2 = 1.0/(dS*dS + 1e-30)
+            B[0]=1.0; RHS[0]=0.0
+            for j in range(1, M-1):
+                Dw = 0.5*(D_core[j] + D_core[j-1])
+                De = 0.5*(D_core[j] + D_core[j+1])
+                A[j] = -Dw*invdS2
+                C[j] = -De*invdS2
+                B[j] = -(A[j] + C[j]) + 1e-12
+                RHS[j] = S_core_nd[j]
+            B[M-1]=1.0; RHS[M-1]=0.0
+
+            # Thomas solve
+            for j in range(1, M):
+                wfac = A[j]/(B[j-1] + 1e-30)
+                B[j]   -= wfac*C[j-1]
+                RHS[j] -= wfac*RHS[j-1]
+            P_new = np.zeros(M)
+            P_new[-1] = RHS[-1]/(B[-1] + 1e-30)
+            for j in range(M-2, -1, -1):
+                P_new[j] = (RHS[j] - C[j]*P_new[j+1])/(B[j] + 1e-30)
+
+            # positivity and hydro load prescale
+            P_new = np.maximum(P_new, 0.0)
+            Wh_trial = np.trapz(P_new * ph, xs) * L
+            s_load   = 1.0 if Wh_trial <= 1e-20 else np.clip(W/Wh_trial, 1e-3, 1e3)
+
+            # relax + smooth
+            P_core = (1 - relax_p)*P_core + relax_p*np.maximum(P_new*s_load, 0.0)
+            Ptmp = P_core.copy()
+            for j in range(1, len(P_core)-1):
+                P_core[j] = K1*Ptmp[j-1] + K0*Ptmp[j] + K1*Ptmp[j+1]
+            P_core[0]=0.0; P_core[-1]=0.0
+
+            # --- Mixed closure (Wh + Wa = W), update film with elastic deflection & TEXTURE ---
+            p_embed = embed_p(P_core)
+            defl  = elastic_deflection(x, p_embed)
+
+            # re-evaluate texture (keeps shift & amplitude fixed within this angle)
+            htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
+
+            h_nom = np.maximum(h0 + x**2/(2*R) + defl + htex, 5e-9)
+            h     = np.maximum(relax_h*h + (1.0-relax_h)*h_nom, 5e-9)
+
+            p_asp = asperity_pressure_greenwood_tripp(h)
+            Wa    = np.trapz(p_asp, x) * L
+            Wh    = np.trapz(p_embed, x) * L
+            Wmix  = Wh + Wa
+            s_mix = (W/Wmix) if Wmix > 1e-20 else 1.0
+            s_mix = max(s_mix, 0.0)
+            P_core *= s_mix  # keep within [-a,a], zero at edges
+
+            # smooth again for stability
+            Ptmp = P_core.copy()
+            for j in range(1, len(P_core)-1):
+                P_core[j] = K1*Ptmp[j-1] + K0*Ptmp[j] + K1*Ptmp[j+1]
+            P_core[0]=0.0; P_core[-1]=0.0
+
+        # conservative update of content field
+        p_tr   = embed_p(P_core)
+        rho_nd = rho_dowson_higginson(p_tr)/rho0
+        Phi    = rho_nd * ((h * R) / ph)
+        G_in_L = 0.5*Phi[0]; G_in_R = 0.5*Phi[-1]
+        div_phi = rusanov_div_bc(1.0, G, dx/max(a,1e-12), G_in_L, G_in_R)
+        G = np.clip(G + (dT)*(-div_phi), 0.0, Phi)
+
+    # Final mixed enforcement
+    p = embed_p(P_core)
+    p_asp_final = asperity_pressure_greenwood_tripp(h)
+    Wa_final = np.trapz(p_asp_final, x) * L
+    Wh_now   = np.trapz(p, x) * L
+    if Wh_now + Wa_final > 1e-20:
+        s_final = W / (Wh_now + Wa_final)
+        s_final = max(s_final, 0.0)
+        p *= s_final
+        defl_final = elastic_deflection(x, p)
+        # recompute texture profile once more at this angle
+        htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
+        h = np.maximum(h0 + x**2/(2*R) + defl_final + htex, 5e-9)
+
+    # Friction forces
+    eta_eff = eta_carreau(eta_houpert(p), h, np.abs(Ve))
+    tau_h   = np.where(h>1e-12, eta_eff*np.abs(Ve)/h, 0.0)
+    Fh      = np.trapz(tau_h, x) * L
+
+    tau_lim = gamma_lim * np.maximum(p, 0.0)
+    Fb      = L * np.trapz(tau_lim + mu_b * p_asp_final, x)
+
+    return {"x": x, "p": p, "h": h, "Fh": float(Fh), "Fb": float(Fb),
+            "Wa": float(Wa_final), "a": float(a), "pmax": float(np.max(p))}
+
+## ============================================================
+# PLOT CONTROLLER & UTILITIES  — with texture-aware controls
+## ============================================================
+
+def _as_list(v): 
+    return list(v) if isinstance(v,(list,tuple,np.ndarray)) else [v]
+
+# --- User knobs (now include surface state & texture-density selectors) ---
+# surface state: 0 = UNTEXTURED, 1 = TEXTURED
+# texture densities may be a single value [5] or multiple like [5, 8, 10]
+PLOT_OPTS = {
+    # Single-profile plots (pressure & film)
+    "cam_angles_deg_for_profiles":   [-2.0],
+    "rpms_for_profiles":             [300],
+    "surface_state_profiles":        [0,1],          # 0 or 1
+    "texture_densities_for_profiles":[5,8],        # e.g., [5] or [5, 8, 10]
+
+    # Sweeps (Fh, Fb, Torque, Wa) versus cam angle
+    "angle_sweep_deg":               np.linspace(float(th_deg.min()), float(th_deg.max()), 61).tolist(),
+    "rpms_for_angle_sweeps":         [300], # e.g., [300,500,700,900]
+    "surface_state_sweeps":          0,          # 0 or 1
+    "texture_densities_for_sweeps":  [8], # list; ignored if surface_state_sweeps==0
+
+    # Average torque & percent reduction controls
+    "ENABLE_AVG_TORQUE":             False,
+    "rpms_for_avg":                  [300, 500],
+    "densities_for_avg_reduction":   [8], # used for % reduction versus UNtextured
+    "ENABLE_AVG_TORQUE_REDUCTION":   False,
+
+    # htex vs angle (300 RPM) — 3 subplots max; use this list to choose which to show
+    "texture_densities_for_htex_300":[5, 8, 10], # choose subset; empty -> skip section
+    "lw": 2.0, "grid_alpha": 0.35, "dpi": 120,
+}
+
+# ---------- helpers that depend on earlier globals ----------
+def _dens_keys(nums):
+    """Map numeric list like [5,8,10] -> ['5%','8%','10%'] and validate."""
+    mapnum = {5:'5%', 8:'8%', 10:'10%'}
+    out = [mapnum[n] for n in _as_list(nums) if n in mapnum]
+    if not out:
+        raise ValueError("No valid texture densities given. Use any of 5, 8, 10.")
+    return out
+
+def _nearest_angle_index(angle_deg):
+    return int(np.argmin(np.abs(th_deg - angle_deg)))
+
+def _arm_at(angle_deg):
+    j = _nearest_angle_index(angle_deg)
+    return rb + lift_s[j]
+
+def _torque(Fh, Fb, angle_deg):
+    return (Fh + Fb) * _arm_at(angle_deg)
+
+def _inputs_at(angle_deg, rpm, R, Ve, Vs, W):
+    w = 2*np.pi*rpm/60.0
+    j = _nearest_angle_index(angle_deg)
+    dtheta = float(np.mean(np.diff(th)))
+    dt = dtheta / (w + 1e-30)
+    return dt, float(R[j]), float(Ve[j]), float(Vs[j]), float(W[j]), j
+
+# ---------- generic sweep with or without texture ----------
+def _sweep_series_general(rpm, textured=False, density_key=None):
+    angles = np.asarray(PLOT_OPTS["angle_sweep_deg"], float)
+    R, Ve, Vs, W, w = kin_arrays(rpm)
+    shift = integrate_shift(Vs, w)
+    if textured:
+        atex = atex_series_for_rpm(density_key, rpm)
+        dtex = D_TEXTURE[density_key]
+
+    Fh_list, Fb_list, Tq_list, Wa_list = [], [], [], []
+    for ang in angles:
+        dt, Rj, Vej, Vsj, Wj, j = _inputs_at(ang, rpm, R, Ve, Vs, W)
+        atex_j = float(atex[j]) if textured else 0.0
+        obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
+                          atex_theta=atex_j, shift_theta=float(shift[j]),
+                          d_texture=dtex if textured else D_TEXTURE['5%'],
+                          Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
+                          M_core=451, observe=True)
+        Fh, Fb, Wa = float(obs["Fh"]), float(obs["Fb"]), float(obs["Wa"])
+        Tq = _torque(Fh, Fb, ang)
+        Fh_list.append(Fh); Fb_list.append(Fb); Tq_list.append(Tq); Wa_list.append(Wa)
+    return angles, np.asarray(Fh_list), np.asarray(Fb_list), np.asarray(Tq_list), np.asarray(Wa_list)
+
+# ============================================================
+# A) Pressure & Film thickness (single profile)
+# ============================================================
+def plot_profile_pressure_and_film():
+    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
+    rpms  = _as_list(PLOT_OPTS["rpms_for_profiles"])
+    angles= _as_list(PLOT_OPTS["cam_angles_deg_for_profiles"])
+    textured = bool(PLOT_OPTS.get("surface_state_profiles", 0))
+    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_profiles",[8])) if textured else ["UN"]
+
+    for rpm in rpms:
+        R, Ve, Vs, W, w = kin_arrays(rpm)
+        shift = integrate_shift(Vs, w)
+        atex_tbl = {dk: atex_series_for_rpm(dk, rpm) for dk in dens_keys if dk != "UN"}
+        for ang in angles:
+            dt, Rj, Vej, Vsj, Wj, j = _inputs_at(ang, rpm, R, Ve, Vs, W)
+            if textured:
+                for dk in dens_keys:
+                    atex_j = float(atex_tbl[dk][j])
+                    obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
+                                      atex_theta=atex_j, shift_theta=float(shift[j]), d_texture=D_TEXTURE[dk],
+                                      Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
+                                      M_core=451, observe=True)
+                    x, p, h, a = obs["x"], obs["p"], obs["h"], float(obs["a"])
+                    X = x/max(a,1e-12); p_nd = p/max(obs["pmax"],1e-30)
+                    plt.figure(dpi=dpi); plt.plot(X, p_nd, linewidth=lw, label=f"{dk} | p/p_max | θ={ang:.1f}°, {rpm} RPM")
+                    plt.xlabel("X = x/a"); plt.ylabel("p/p_max"); plt.title("Reynolds pressure vs X"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+                    plt.figure(dpi=dpi); plt.plot(x*1e3, h*1e9, linewidth=lw, label=f"{dk} | h(x) | θ={ang:.1f}°, {rpm} RPM")
+                    plt.xlabel("x (mm)"); plt.ylabel("h (nm)"); plt.title("Film thickness vs x"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+            else:
+                obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
+                                  atex_theta=0.0, shift_theta=0.0, d_texture=D_TEXTURE['5%'],
+                                  Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
+                                  M_core=451, observe=True)
+                x, p, h, a = obs["x"], obs["p"], obs["h"], float(obs["a"])
+                X = x/max(a,1e-12); p_nd = p/max(obs["pmax"],1e-30)
+                plt.figure(dpi=dpi); plt.plot(X, p_nd, linewidth=lw, label=f"UN | p/p_max | θ={ang:.1f}°, {rpm} RPM")
+                plt.xlabel("X = x/a"); plt.ylabel("p/p_max"); plt.title("Reynolds pressure vs X"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+                plt.figure(dpi=dpi); plt.plot(x*1e3, h*1e9, linewidth=lw, label=f"UN | h(x) | θ={ang:.1f}°, {rpm} RPM")
+                plt.xlabel("x (mm)"); plt.ylabel("h (nm)"); plt.title("Film thickness vs x"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+
+# ============================================================
+# B) Asperity friction vs cam angle
+# ============================================================
+def plot_asperity_friction_vs_angle():
+    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
+    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
+    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
+    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
+
+    plt.figure(dpi=dpi)
+    for rpm in rpms:
+        if textured:
+            for dk in dens_keys:
+                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
+                plt.plot(angles, Fb, linewidth=lw, label=f"Fb | {dk} | {rpm} RPM")
+        else:
+            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
+            plt.plot(angles, Fb, linewidth=lw, label=f"Fb | UN | {rpm} RPM")
+    plt.xlabel("Cam angle (deg)"); plt.ylabel("Asperity friction Fb (N)")
+    plt.title("Asperity friction vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+
+# ============================================================
+# C) Hydrodynamic friction vs cam angle
+# ============================================================
+def plot_hydrodynamic_friction_vs_angle():
+    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
+    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
+    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
+    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
+
+    plt.figure(dpi=dpi)
+    for rpm in rpms:
+        if textured:
+            for dk in dens_keys:
+                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
+                plt.plot(angles, Fh, linewidth=lw, label=f"Fh | {dk} | {rpm} RPM")
+        else:
+            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
+            plt.plot(angles, Fh, linewidth=lw, label=f"Fh | UN | {rpm} RPM")
+    plt.xlabel("Cam angle (deg)"); plt.ylabel("Hydrodynamic friction Fh (N)")
+    plt.title("Hydrodynamic friction vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+
+# ============================================================
+# D) Friction torque vs cam angle
+# ============================================================
+def plot_friction_torque_vs_angle():
+    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
+    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
+    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
+    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
+
+    plt.figure(dpi=dpi)
+    for rpm in rpms:
+        if textured:
+            for dk in dens_keys:
+                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
+                plt.plot(angles, Tq, linewidth=lw, label=f"T | {dk} | {rpm} RPM")
+        else:
+            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
+            plt.plot(angles, Tq, linewidth=lw, label=f"T | UN | {rpm} RPM")
+    plt.xlabel("Cam angle (deg)"); plt.ylabel("Friction torque T (N·m)")
+    plt.title("Friction torque vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+
+# ============================================================
+# E) Asperity load vs cam angle
+# ============================================================
+def plot_asperity_load_vs_angle():
+    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
+    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
+    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
+    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
+
+    plt.figure(dpi=dpi)
+    for rpm in rpms:
+        if textured:
+            for dk in dens_keys:
+                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
+                plt.plot(angles, Wa, linewidth=lw, label=f"Wa | {dk} | {rpm} RPM")
+        else:
+            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
+            plt.plot(angles, Wa, linewidth=lw, label=f"Wa | UN | {rpm} RPM")
+    plt.xlabel("Cam angle (deg)"); plt.ylabel("Asperity load Wa (N)")
+    plt.title("Asperity load vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+
+# ============================================================
+# F) Average friction torque and % reduction controls
+# ============================================================
+def average_cycle_torque(rpm, textured=False, density_key=None):
+    angles = np.asarray(PLOT_OPTS["angle_sweep_deg"], float)
+    R, Ve, Vs, W, w = kin_arrays(rpm)
+    shift = integrate_shift(Vs, w)
+    if textured:
+        atex = atex_series_for_rpm(density_key, rpm)
+        dtex = D_TEXTURE[density_key]
+    Tq = []
+    for ang in angles:
+        dt, Rj, Vej, Vsj, Wj, j = _inputs_at(ang, rpm, R, Ve, Vs, W)
+        atex_j = float(atex[j]) if textured else 0.0
+        obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
+                          atex_theta=atex_j, shift_theta=float(shift[j]),
+                          d_texture=dtex if textured else D_TEXTURE['5%'],
+                          Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
+                          M_core=451, observe=True)
+        Tq.append(_torque(float(obs["Fh"]), float(obs["Fb"]), ang))
+    return float(np.mean(Tq))
+
+def section_avg_torque_and_reduction():
+    if not bool(PLOT_OPTS.get("ENABLE_AVG_TORQUE", True)):
+        print("[Avg torque] — skipped (toggle OFF)."); return
+    rpms = _as_list(PLOT_OPTS.get("rpms_for_avg",[300,500]))
+    dens_keys = _dens_keys(PLOT_OPTS.get("densities_for_avg_reduction",[5,8,10]))
+
+    print("\n=== Average friction torque over cycle ===")
+    for rpm in rpms:
+        T_un = average_cycle_torque(rpm, textured=False)
+        print(f"\nRPM {rpm:>4}:  UNtextured  <T> = {T_un:.6f} N·m")
+        if bool(PLOT_OPTS.get("ENABLE_AVG_TORQUE_REDUCTION", True)):
+            for dk in dens_keys:
+                T_tex = average_cycle_torque(rpm, textured=True, density_key=dk)
+                red = 100.0*(T_un - T_tex)/abs(T_un) if abs(T_un) > 1e-12 else 0.0
+                print(f"           {dk:>3} textured  <T> = {T_tex:.6f} N·m   (Δ% vs UN = {red:+.2f}%)")
+
+# ============================================================
+# G) htex vs angle at 300 RPM — controlled densities
+# ============================================================
+def plot_htex_vs_angle_300rpm():
+    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_htex_300",[5,8,10]))
+    if len(dens_keys)==0: 
+        return
+    rpm = 300
+    R, Ve, Vs, W, w = kin_arrays(rpm)
+    shift = integrate_shift(Vs, w)
+    fig, axs = plt.subplots(len(dens_keys), 1, figsize=(7, 2.6*len(dens_keys)), sharex=True)
+    axs = np.atleast_1d(axs)
+    for ax, dk in zip(axs, dens_keys):
+        atex = atex_series_for_rpm(dk, rpm)
+        dtex = D_TEXTURE[dk]
+        h0 = []
+        for i in range(len(th_deg)):
+            a = a_hertz(W[i], R[i])
+            h0.append( htex_profile(np.array([0.0]), a, atex[i], shift[i], dtex)[0] )
+        ax.plot(th_deg, np.array(h0), linewidth=PLOT_OPTS["lw"])
+        ax.set_ylabel(f"htex (m)\n{dk}"); ax.grid(True, alpha=PLOT_OPTS["grid_alpha"])
+    axs[-1].set_xlabel("Cam angle (deg)")
+    fig.suptitle("htex at contact center vs cam angle (300 RPM)")
+    plt.tight_layout(rect=[0,0,1,0.95])
+
+
+# ============================================================
+# Master runner
+# ============================================================
+def run_all():
+    # Example profile(s) — controlled via PLOT_OPTS
+    plot_profile_pressure_and_film()
+
+    # htex vs angle (300 RPM) subplots — densities via PLOT_OPTS["texture_densities_for_htex_300"]
+    plot_htex_vs_angle_300rpm()
+
+    # Angle sweeps — controlled via PLOT_OPTS (surface state & densities)
+    plot_asperity_friction_vs_angle()
+    plot_hydrodynamic_friction_vs_angle()
+    plot_friction_torque_vs_angle()
+    plot_asperity_load_vs_angle()
+
+    # Average torque & % reduction — controlled via PLOT_OPTS
+    section_avg_torque_and_reduction()
+
+    plt.show()
+# ----- Execute -----
+if __name__ == "__main__":
+    run_all()
