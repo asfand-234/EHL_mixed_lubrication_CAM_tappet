@@ -400,298 +400,49 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     return {"x": x, "p": p, "h": h, "Fh": float(Fh), "Fb": float(Fb),
             "Wa": float(Wa_final), "a": float(a), "pmax": float(np.max(p))}
 
-## ============================================================
-# PLOT CONTROLLER & UTILITIES  — with texture-aware controls
-## ============================================================
+# ============================================================
+# PRINT: % reduction of averaged friction torque vs untextured
+# Only for 5% texture case, over all RPMs available in the file
+# ============================================================
 
-def _as_list(v): 
-    return list(v) if isinstance(v,(list,tuple,np.ndarray)) else [v]
+# Helper: list RPM columns present in the 5% texture table
+_rpm_cols_5 = [c for c in ATEX_TABLES["5%"].columns if c.startswith("RPM")]
+_rpms_5     = sorted(int(c.replace("RPM", "")) for c in _rpm_cols_5)
 
-# --- User knobs (now include surface state & texture-density selectors) ---
-# surface state: 0 = UNTEXTURED, 1 = TEXTURED
-# texture densities may be a single value [5] or multiple like [5, 8, 10]
-PLOT_OPTS = {
-    # Single-profile plots (pressure & film)
-    "cam_angles_deg_for_profiles":   [-2.0],
-    "rpms_for_profiles":             [300],
-    "surface_state_profiles":        [0,1],          # 0 or 1
-    "texture_densities_for_profiles":[5,8],        # e.g., [5] or [5, 8, 10]
-
-    # Sweeps (Fh, Fb, Torque, Wa) versus cam angle
-    "angle_sweep_deg":               np.linspace(float(th_deg.min()), float(th_deg.max()), 61).tolist(),
-    "rpms_for_angle_sweeps":         [300], # e.g., [300,500,700,900]
-    "surface_state_sweeps":          0,          # 0 or 1
-    "texture_densities_for_sweeps":  [8], # list; ignored if surface_state_sweeps==0
-
-    # Average torque & percent reduction controls
-    "ENABLE_AVG_TORQUE":             False,
-    "rpms_for_avg":                  [300, 500],
-    "densities_for_avg_reduction":   [8], # used for % reduction versus UNtextured
-    "ENABLE_AVG_TORQUE_REDUCTION":   False,
-
-    # htex vs angle (300 RPM) — 3 subplots max; use this list to choose which to show
-    "texture_densities_for_htex_300":[5, 8, 10], # choose subset; empty -> skip section
-    "lw": 2.0, "grid_alpha": 0.35, "dpi": 120,
-}
-
-# ---------- helpers that depend on earlier globals ----------
-def _dens_keys(nums):
-    """Map numeric list like [5,8,10] -> ['5%','8%','10%'] and validate."""
-    mapnum = {5:'5%', 8:'8%', 10:'10%'}
-    out = [mapnum[n] for n in _as_list(nums) if n in mapnum]
-    if not out:
-        raise ValueError("No valid texture densities given. Use any of 5, 8, 10.")
-    return out
-
-def _nearest_angle_index(angle_deg):
-    return int(np.argmin(np.abs(th_deg - angle_deg)))
-
-def _arm_at(angle_deg):
-    j = _nearest_angle_index(angle_deg)
-    return rb + lift_s[j]
-
-def _torque(Fh, Fb, angle_deg):
-    return (Fh + Fb) * _arm_at(angle_deg)
-
-def _inputs_at(angle_deg, rpm, R, Ve, Vs, W):
-    w = 2*np.pi*rpm/60.0
-    j = _nearest_angle_index(angle_deg)
-    dtheta = float(np.mean(np.diff(th)))
-    dt = dtheta / (w + 1e-30)
-    return dt, float(R[j]), float(Ve[j]), float(Vs[j]), float(W[j]), j
-
-# ---------- generic sweep with or without texture ----------
-def _sweep_series_general(rpm, textured=False, density_key=None):
-    angles = np.asarray(PLOT_OPTS["angle_sweep_deg"], float)
+rows = []
+for rpm in _rpms_5:
+    # Kinematics & time step per cam angle
     R, Ve, Vs, W, w = kin_arrays(rpm)
-    shift = integrate_shift(Vs, w)
-    if textured:
-        atex = atex_series_for_rpm(density_key, rpm)
-        dtex = D_TEXTURE[density_key]
+    dt     = np.gradient(th) / max(w, 1e-30)
+    shift  = integrate_shift(Vs, w)
+    d_tex  = D_TEXTURE["5%"]
+    atex   = np.nan_to_num(atex_series_for_rpm("5%", rpm), nan=0.0)
 
-    Fh_list, Fb_list, Tq_list, Wa_list = [], [], [], []
-    for ang in angles:
-        dt, Rj, Vej, Vsj, Wj, j = _inputs_at(ang, rpm, R, Ve, Vs, W)
-        atex_j = float(atex[j]) if textured else 0.0
-        obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
-                          atex_theta=atex_j, shift_theta=float(shift[j]),
-                          d_texture=dtex if textured else D_TEXTURE['5%'],
-                          Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
-                          M_core=451, observe=True)
-        Fh, Fb, Wa = float(obs["Fh"]), float(obs["Fb"]), float(obs["Wa"])
-        Tq = _torque(Fh, Fb, ang)
-        Fh_list.append(Fh); Fb_list.append(Fb); Tq_list.append(Tq); Wa_list.append(Wa)
-    return angles, np.asarray(Fh_list), np.asarray(Fb_list), np.asarray(Tq_list), np.asarray(Wa_list)
+    # Accumulate instantaneous torque = (Fh + Fb) * effective radius
+    T_smooth, T_tex = [], []
+    for i, ang in enumerate(th_deg):
+        # Untextured reference
+        res_s = solve_theta(R[i], Ve[i], Vs[i], W[i], dt[i], ang, rpm,
+                            atex_theta=0.0, shift_theta=shift[i], d_texture=d_tex,
+                            observe=False)
+        # 5% textured case (theta-dependent amplitude from file)
+        res_t = solve_theta(R[i], Ve[i], Vs[i], W[i], dt[i], ang, rpm,
+                            atex_theta=float(max(atex[i], 0.0)),
+                            shift_theta=shift[i], d_texture=d_tex,
+                            observe=False)
 
-# ============================================================
-# A) Pressure & Film thickness (single profile)
-# ============================================================
-def plot_profile_pressure_and_film():
-    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
-    rpms  = _as_list(PLOT_OPTS["rpms_for_profiles"])
-    angles= _as_list(PLOT_OPTS["cam_angles_deg_for_profiles"])
-    textured = bool(PLOT_OPTS.get("surface_state_profiles", 0))
-    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_profiles",[8])) if textured else ["UN"]
+        r_eff = rb + lift_s[i]  # instantaneous cam radius for torque arm
+        T_smooth.append( (res_s["Fh"] + res_s["Fb"]) * r_eff )
+        T_tex.append(    (res_t["Fh"] + res_t["Fb"]) * r_eff )
 
-    for rpm in rpms:
-        R, Ve, Vs, W, w = kin_arrays(rpm)
-        shift = integrate_shift(Vs, w)
-        atex_tbl = {dk: atex_series_for_rpm(dk, rpm) for dk in dens_keys if dk != "UN"}
-        for ang in angles:
-            dt, Rj, Vej, Vsj, Wj, j = _inputs_at(ang, rpm, R, Ve, Vs, W)
-            if textured:
-                for dk in dens_keys:
-                    atex_j = float(atex_tbl[dk][j])
-                    obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
-                                      atex_theta=atex_j, shift_theta=float(shift[j]), d_texture=D_TEXTURE[dk],
-                                      Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
-                                      M_core=451, observe=True)
-                    x, p, h, a = obs["x"], obs["p"], obs["h"], float(obs["a"])
-                    X = x/max(a,1e-12); p_nd = p/max(obs["pmax"],1e-30)
-                    plt.figure(dpi=dpi); plt.plot(X, p_nd, linewidth=lw, label=f"{dk} | p/p_max | θ={ang:.1f}°, {rpm} RPM")
-                    plt.xlabel("X = x/a"); plt.ylabel("p/p_max"); plt.title("Reynolds pressure vs X"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
-                    plt.figure(dpi=dpi); plt.plot(x*1e3, h*1e9, linewidth=lw, label=f"{dk} | h(x) | θ={ang:.1f}°, {rpm} RPM")
-                    plt.xlabel("x (mm)"); plt.ylabel("h (nm)"); plt.title("Film thickness vs x"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
-            else:
-                obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
-                                  atex_theta=0.0, shift_theta=0.0, d_texture=D_TEXTURE['5%'],
-                                  Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
-                                  M_core=451, observe=True)
-                x, p, h, a = obs["x"], obs["p"], obs["h"], float(obs["a"])
-                X = x/max(a,1e-12); p_nd = p/max(obs["pmax"],1e-30)
-                plt.figure(dpi=dpi); plt.plot(X, p_nd, linewidth=lw, label=f"UN | p/p_max | θ={ang:.1f}°, {rpm} RPM")
-                plt.xlabel("X = x/a"); plt.ylabel("p/p_max"); plt.title("Reynolds pressure vs X"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
-                plt.figure(dpi=dpi); plt.plot(x*1e3, h*1e9, linewidth=lw, label=f"UN | h(x) | θ={ang:.1f}°, {rpm} RPM")
-                plt.xlabel("x (mm)"); plt.ylabel("h (nm)"); plt.title("Film thickness vs x"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+    Tavg_s = float(np.mean(T_smooth))
+    Tavg_t = float(np.mean(T_tex))
+    pct_reduction = 100.0 * (1.0 - Tavg_t / max(Tavg_s, 1e-30))
 
-# ============================================================
-# B) Asperity friction vs cam angle
-# ============================================================
-def plot_asperity_friction_vs_angle():
-    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
-    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
-    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
-    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
+    rows.append({"RPM": rpm, "Pct_Reduction_vs_Untextured": pct_reduction})
 
-    plt.figure(dpi=dpi)
-    for rpm in rpms:
-        if textured:
-            for dk in dens_keys:
-                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
-                plt.plot(angles, Fb, linewidth=lw, label=f"Fb | {dk} | {rpm} RPM")
-        else:
-            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
-            plt.plot(angles, Fb, linewidth=lw, label=f"Fb | UN | {rpm} RPM")
-    plt.xlabel("Cam angle (deg)"); plt.ylabel("Asperity friction Fb (N)")
-    plt.title("Asperity friction vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
+df_redux = pd.DataFrame(rows).sort_values("RPM").reset_index(drop=True)
 
-# ============================================================
-# C) Hydrodynamic friction vs cam angle
-# ============================================================
-def plot_hydrodynamic_friction_vs_angle():
-    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
-    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
-    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
-    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
-
-    plt.figure(dpi=dpi)
-    for rpm in rpms:
-        if textured:
-            for dk in dens_keys:
-                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
-                plt.plot(angles, Fh, linewidth=lw, label=f"Fh | {dk} | {rpm} RPM")
-        else:
-            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
-            plt.plot(angles, Fh, linewidth=lw, label=f"Fh | UN | {rpm} RPM")
-    plt.xlabel("Cam angle (deg)"); plt.ylabel("Hydrodynamic friction Fh (N)")
-    plt.title("Hydrodynamic friction vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
-
-# ============================================================
-# D) Friction torque vs cam angle
-# ============================================================
-def plot_friction_torque_vs_angle():
-    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
-    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
-    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
-    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
-
-    plt.figure(dpi=dpi)
-    for rpm in rpms:
-        if textured:
-            for dk in dens_keys:
-                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
-                plt.plot(angles, Tq, linewidth=lw, label=f"T | {dk} | {rpm} RPM")
-        else:
-            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
-            plt.plot(angles, Tq, linewidth=lw, label=f"T | UN | {rpm} RPM")
-    plt.xlabel("Cam angle (deg)"); plt.ylabel("Friction torque T (N·m)")
-    plt.title("Friction torque vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
-
-# ============================================================
-# E) Asperity load vs cam angle
-# ============================================================
-def plot_asperity_load_vs_angle():
-    lw = PLOT_OPTS["lw"]; dpi = PLOT_OPTS["dpi"]
-    rpms   = _as_list(PLOT_OPTS["rpms_for_angle_sweeps"])
-    textured = bool(PLOT_OPTS.get("surface_state_sweeps", 0))
-    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_sweeps",[5,8,10])) if textured else ["UN"]
-
-    plt.figure(dpi=dpi)
-    for rpm in rpms:
-        if textured:
-            for dk in dens_keys:
-                angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=True, density_key=dk)
-                plt.plot(angles, Wa, linewidth=lw, label=f"Wa | {dk} | {rpm} RPM")
-        else:
-            angles, Fh, Fb, Tq, Wa = _sweep_series_general(rpm, textured=False)
-            plt.plot(angles, Wa, linewidth=lw, label=f"Wa | UN | {rpm} RPM")
-    plt.xlabel("Cam angle (deg)"); plt.ylabel("Asperity load Wa (N)")
-    plt.title("Asperity load vs cam angle"); plt.grid(True, alpha=PLOT_OPTS["grid_alpha"]); plt.legend(); plt.tight_layout()
-
-# ============================================================
-# F) Average friction torque and % reduction controls
-# ============================================================
-def average_cycle_torque(rpm, textured=False, density_key=None):
-    angles = np.asarray(PLOT_OPTS["angle_sweep_deg"], float)
-    R, Ve, Vs, W, w = kin_arrays(rpm)
-    shift = integrate_shift(Vs, w)
-    if textured:
-        atex = atex_series_for_rpm(density_key, rpm)
-        dtex = D_TEXTURE[density_key]
-    Tq = []
-    for ang in angles:
-        dt, Rj, Vej, Vsj, Wj, j = _inputs_at(ang, rpm, R, Ve, Vs, W)
-        atex_j = float(atex[j]) if textured else 0.0
-        obs = solve_theta(Rj, Vej, Vsj, Wj, dt, ang, rpm,
-                          atex_theta=atex_j, shift_theta=float(shift[j]),
-                          d_texture=dtex if textured else D_TEXTURE['5%'],
-                          Nx=171, iters=52, substep_cap=6, relax_p=0.85, relax_h=0.55,
-                          M_core=451, observe=True)
-        Tq.append(_torque(float(obs["Fh"]), float(obs["Fb"]), ang))
-    return float(np.mean(Tq))
-
-def section_avg_torque_and_reduction():
-    if not bool(PLOT_OPTS.get("ENABLE_AVG_TORQUE", True)):
-        print("[Avg torque] — skipped (toggle OFF)."); return
-    rpms = _as_list(PLOT_OPTS.get("rpms_for_avg",[300,500]))
-    dens_keys = _dens_keys(PLOT_OPTS.get("densities_for_avg_reduction",[5,8,10]))
-
-    print("\n=== Average friction torque over cycle ===")
-    for rpm in rpms:
-        T_un = average_cycle_torque(rpm, textured=False)
-        print(f"\nRPM {rpm:>4}:  UNtextured  <T> = {T_un:.6f} N·m")
-        if bool(PLOT_OPTS.get("ENABLE_AVG_TORQUE_REDUCTION", True)):
-            for dk in dens_keys:
-                T_tex = average_cycle_torque(rpm, textured=True, density_key=dk)
-                red = 100.0*(T_un - T_tex)/abs(T_un) if abs(T_un) > 1e-12 else 0.0
-                print(f"           {dk:>3} textured  <T> = {T_tex:.6f} N·m   (Δ% vs UN = {red:+.2f}%)")
-
-# ============================================================
-# G) htex vs angle at 300 RPM — controlled densities
-# ============================================================
-def plot_htex_vs_angle_300rpm():
-    dens_keys = _dens_keys(PLOT_OPTS.get("texture_densities_for_htex_300",[5,8,10]))
-    if len(dens_keys)==0: 
-        return
-    rpm = 300
-    R, Ve, Vs, W, w = kin_arrays(rpm)
-    shift = integrate_shift(Vs, w)
-    fig, axs = plt.subplots(len(dens_keys), 1, figsize=(7, 2.6*len(dens_keys)), sharex=True)
-    axs = np.atleast_1d(axs)
-    for ax, dk in zip(axs, dens_keys):
-        atex = atex_series_for_rpm(dk, rpm)
-        dtex = D_TEXTURE[dk]
-        h0 = []
-        for i in range(len(th_deg)):
-            a = a_hertz(W[i], R[i])
-            h0.append( htex_profile(np.array([0.0]), a, atex[i], shift[i], dtex)[0] )
-        ax.plot(th_deg, np.array(h0), linewidth=PLOT_OPTS["lw"])
-        ax.set_ylabel(f"htex (m)\n{dk}"); ax.grid(True, alpha=PLOT_OPTS["grid_alpha"])
-    axs[-1].set_xlabel("Cam angle (deg)")
-    fig.suptitle("htex at contact center vs cam angle (300 RPM)")
-    plt.tight_layout(rect=[0,0,1,0.95])
-
-
-# ============================================================
-# Master runner
-# ============================================================
-def run_all():
-    # Example profile(s) — controlled via PLOT_OPTS
-    plot_profile_pressure_and_film()
-
-    # htex vs angle (300 RPM) subplots — densities via PLOT_OPTS["texture_densities_for_htex_300"]
-    plot_htex_vs_angle_300rpm()
-
-    # Angle sweeps — controlled via PLOT_OPTS (surface state & densities)
-    plot_asperity_friction_vs_angle()
-    plot_hydrodynamic_friction_vs_angle()
-    plot_friction_torque_vs_angle()
-    plot_asperity_load_vs_angle()
-
-    # Average torque & % reduction — controlled via PLOT_OPTS
-    section_avg_torque_and_reduction()
-
-    plt.show()
-# ----- Execute -----
-if __name__ == "__main__":
-    run_all()
+print("\n% Reduction of AVERAGED friction torque (5% texture) relative to UNTEXTURED")
+print(df_redux.to_string(index=False,
+      formatters={"Pct_Reduction_vs_Untextured": lambda v: f"{v:6.2f}"}))
