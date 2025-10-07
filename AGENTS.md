@@ -17,6 +17,7 @@ RPM      % Avg. friction Tq reduction
 Your task is only tune/calibrate the data set of ""a_texture_data_5pct.txt" file in non-zero cells only of each column of RPM to meet at least 85% same target results for only 5%. Do not tune other file data just focus on 5% results for all RPMs.
 
 *IMPLEMENTATION STRATEGY:*
+You can simplify the code and can reduce Nx and angles for your calibration and tests purpose. But the original script should not be changed. And when you complete calibration for all RPMs then run my orginal script by importing yoir updated amplitude 5pc file data and review the results.
 Start with first case, like in amplitude 5 percent in 300 column, now tune every random non-zeros cell values in different and run the entire simulation and focus only on results of % reduction of averaged friction torque for 5% at 300 RPM. Keep tuning every value in entire column perform different treatments and understand the behaviour once you achieved at least 85% same target results. Then move to next column like amplitude 5 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 85% same a target results 
 
 *HARD STRICT RULES:*
