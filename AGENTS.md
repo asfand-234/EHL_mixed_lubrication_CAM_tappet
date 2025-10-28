@@ -1,31 +1,12 @@
-Read text file "python_eight.txt" code which calculates the percentage reduction of averaged friction torque with respect to untextured. It is about friction reduction due to textures/grooves in CAM and textured shim (inside bucket tappet) using 1D mixed lubrication theory. And a Cam lift data file named "CamAngle_vs_Lift_smooth.txt". 
-The current script uses a mathemtical model of textures with fixed parameters and compute entire reynolds equation solution and calculate % averaged friction torque reduction.
-Only 1 parameter in texture model is not fixed i.e. a_tex (amplitude). The code takes 3 files as input ""a_texture_data_5pct.txt", "a_texture_data_8pct.txt", and "a_texture_data_10pct.txt". 
-
-*PROBLEM:*
-The current results for 5% texture for all RPMs are not as per target results.
-
-*TARGET RESULTS:*
-The target results are given as,
-RPM      % Avg. friction Tq reduction         
-300      3.4%                
-500      6.12%            
-700       4.21%         
-900      18.33%   
-
-*TASK:*
-Your task is only tune/calibrate the data set of ""a_texture_data_5pct.txt" file in non-zero cells only of each column of RPM to meet at least 85% same target results for only 5%. Do not tune other file data just focus on 5% results for all RPMs.
-
-*IMPLEMENTATION STRATEGY:*
-You can simplify the code and can reduce Nx and angles for your calibration and tests purpose. But the original script should not be changed. And when you complete calibration for all RPMs then run my orginal script by importing yoir updated amplitude 5pc file data and review the results.
-Start with first case, like in amplitude 5 percent in 300 column, now tune every random non-zeros cell values in different and run the entire simulation and focus only on results of % reduction of averaged friction torque for 5% at 300 RPM. Keep tuning every value in entire column perform different treatments and understand the behaviour once you achieved at least 85% same target results. Then move to next column like amplitude 5 percent at 500 RPM. And so on keep going one by one until you tuned every data and all the results meet at least 85% same a target results 
-
-*HARD STRICT RULES:*
-i) DO NOT make changes in zero cells, only calibrate values of non-zeros cells. And STRICTLY the calibration only allowed greater then 0 and less than 7e-6.
-ii) DO NOT put any calibration/fitting/non-physical scaling in script, rather must only tune/calibrate non-zero cells values in each column to meet the target.
-iii) DO NOT make any single change or do not add any factor in any physics in entire code.
-iv) Run the entire simulation every time and compare your results with 5% target results.
-
-*DELIVERABLES:*
-Only and only once the codex achieve target then generate the updated a_texture data file of 5% only. 
-Do not print any other results to me other than final 5% updated a_texture file.
+Read the python code "python_twelve" related to friction torque calculation with surface texturing using 1D mixed lubrication line contact theory in CAM and flat faced follower mechanism.
+TASK:
+Your task is to achieve following changes in my code,
+1) Reynolds equation itself must be discretized/solved non-dimensionally by using standard EHL scaling for its variables like H = (h*R)/a^2, ETA = eta/eta0, RHO = rho/rho0, U = Ve/Vref  etc. 
+But when this non-dimensional pressure P is used then it should be dimensionalized with scaling p = p*ph in all other models where p is required like rheological models, Wh, frictions etc. etc. 
+2) Remove unnecessary conditions/window's boundness which is creating any ambiguity in reynolds solver. As per standard mixed lubrication line contact theory, pressure profile must lie on contact zone which in non dimensional case it should be on x=-1 to 1. But the contact window should be -4.5 to 3. And pressure must be zero line away from -1 to 1. Make sure no any shrinkage or leakage of reynolds profile occur.
+3) In pressure profile plot control section, it must only plot the same non-dimensional pressure vs nondimensional x axis calculated from its physics. 
+4) make sure the viscosity is being calculated as per standard theory and its profile is stable and accurate. 
+5) Make sure film thickness is currectly updated after every loop so that final film thickness must be as per standard which is a flat line on contact zone (-a to a) and exponential like increasing away from contact zone 
+6) Make sure all physics are perfectly aligned and linked with each other like standard simulation.
+TESTING:
+Once you achieve and sured all above 6 points changes the run the entire code with a single rpm and any single cam angle and visualize the profiles and convergence if any thing lack from standard literature restart improving from point 1 to 6. Once achieved goal then only regenerate entire complete ready to paste code including both physics section and plot control section without any missing/hidden lines.
