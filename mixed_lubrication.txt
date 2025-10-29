@@ -55,13 +55,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 fig = plt.figure(figsize=(8,5))
-ax = fig.gca(projection='3d')
-ax.plot_trisurf(X.flatten()/hertz_a, Y.flatten()/hertz_a, state['nd_pressure'].flatten(), 
-                cmap=plt.cm.viridis, linewidth=0.2)
-ax.set_xlabel('ND length')
-ax.set_ylabel('ND length')
-ax.set_zlabel('ND pressure')
-ax.set_title('Pressure distribution')
 plt.show()
 state['gap'][state['gap']<0.5e-9] = 0.5e-9 
 plt.imshow(np.log(state['gap']))
@@ -75,4 +68,5 @@ plt.plot(X[:,0]/hertz_a, state['gap'][:,32]/hertz_a)
 ax = plt.gca()
 ax.set_xlabel('Nondimensional length')
 ax.set_ylabel('Nondimensional film thickness')
+
 ax.set_title('Central film thickness')
