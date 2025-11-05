@@ -29,10 +29,12 @@ CAM = _load_cam(DATA_DIR, CAM_FILE)
 th_deg = CAM["angle_deg"].to_numpy(dtype=float)
 th     = np.deg2rad(th_deg)
 lift   = CAM["lift_m"].to_numpy(dtype=float)
+TH_DEG = th_deg.copy()
+lift_s = lift.copy()
 dlift_s  = np.gradient(lift, th)           # dL/dθ
-d2lift_s = np.gradient(dlift_s, th) 
+d2lift_s = np.gradient(dlift_s, th)
 # ============================================================
-# Materials / geometry / fluid 
+# Materials / geometry / fluid (Fixed)
 # ============================================================
 rb       = 18.5e-3      # base circle radius [m]
 k_spring = 7130.0       # spring rate [N/m]
@@ -102,9 +104,9 @@ MASK_THR_MULT = 4.0
 # ============================================================
 # Greenwood–Tripp constants 
 # ============================================================
-sigma_combined = 0.26e-6
+sigma_combined = 0.24e-6
 beta_a         = sigma_combined/0.001
-eta_R          = (0.063/(sigma_combined*beta_a))
+eta_R          = (0.053/(sigma_combined*beta_a))
 
 # GT F_{3/2} lookup (pressure/load)
 _gt_w = np.linspace(0.0, 8.0, 400)
@@ -312,6 +314,8 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     a  = max(a_hertz(W, R), 1e-6)
     ph = max(ph_hertz(W, a), 1e3)
 
+    h_floor = 1.0e-9
+
     # Extended film grid (pressure will be embedded from core)
     xL, xR = X_in*a, X_out*a
     x  = np.linspace(xL, xR, Nx)
@@ -323,7 +327,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         dx = x[1] - x[0]
 
     # Core ND grid
-    S_WIN = 1.3
+    S_WIN = 1.2
     s  = np.linspace(-S_WIN, S_WIN, int(M_core))
     xs = a * s
     dS = s[1] - s[0]
@@ -335,7 +339,8 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
 
     # Initial film guess (nominal parabolic + texture)
-    h  = np.maximum(h0 + x**2/(2*R) + htex, 5e-9)
+    h_shift = 0.0
+    h  = np.maximum(h0 + h_shift + x**2/(2*R) + htex, h_floor)
 
     # Placeholders for previous nominal film to approximate squeeze
     h_nom_prev = h.copy()
@@ -353,7 +358,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         return p_full
 
     # Smoother weights
-    K0, K1 = 0.95, 0.025
+    K0, K1 = 0.92, 0.025
 
     # Substepping for modest squeeze approximation & stability
     u1_local = np.abs(Ve)
@@ -449,11 +454,37 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
         # --- gentle load relaxation each substep (preserves local shape) ---
         p_tmp  = embed_p(P_new)
-        Wa_sub = np.trapezoid(asperity_pressure_greenwood_tripp(np.maximum(h_nom,5e-9)), x) * L
+        Wa_sub = np.trapezoid(asperity_pressure_greenwood_tripp(np.maximum(h_nom,h_floor)), x) * L
         Wh_sub = np.trapezoid(p_tmp, x) * L
-        if (Wa_sub + Wh_sub) > 1e-18:
-            s_relax = np.clip((W/(Wa_sub + Wh_sub + 1e-30))**0.25, 0.90, 1.10)
-            P_new *= s_relax
+        total_load = Wa_sub + Wh_sub
+        if total_load > 1e-18:
+            if total_load > W:
+                Wh_target = max(W - Wa_sub, 0.0)
+                if Wh_sub > 1e-18:
+                    s_relax = np.clip(Wh_target/(Wh_sub + 1e-30), 0.0, 1.0)
+                    P_new *= s_relax
+                    Wh_sub *= s_relax
+                total_load = Wa_sub + Wh_sub
+            else:
+                load_ratio = W/(total_load + 1e-30)
+                if load_ratio < 1.0:
+                    s_relax = np.clip(load_ratio, 0.10, 1.0)
+                    P_new *= s_relax
+                    Wh_sub *= s_relax
+                    total_load = Wa_sub + Wh_sub
+        else:
+            total_load = 1e-18
+
+        gap_baseline = max(np.median(h_nom), h_floor)
+        load_error = W - total_load
+        load_norm = np.clip(load_error/(abs(W) + 1e-30), -1.0, 1.0)
+        gap_relax = 0.45
+        angle_weight = np.exp(-((angle_deg)/18.0)**2)
+        gap_relax_eff = gap_relax * (0.35 + 0.65*angle_weight)
+        h_shift -= gap_relax_eff * load_norm * gap_baseline
+        h_shift = np.clip(h_shift, h_floor - h0, 1.25*h0)
+        if Ve >= 0.0:
+            h_shift = max(h_shift, -0.25*h0)
 
         # Relax + light smoothing
         P_core = (1 - relax_p) * P_core + relax_p * P_new
@@ -462,24 +493,32 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         P_core[0]  = 0.0
         P_core[-1] = 0.0
 
-       
         p_prev = embed_p(P_core).copy()
 
         # Update film (elastic + texture)
         defl  = elastic_deflection(x, p_prev)
-        h_candidate = np.maximum(h0 + x**2/(2*R) + defl + htex, 5e-9)
-        h = np.maximum(relax_h*h + (1.0-relax_h)*h_candidate, 5e-9)
+        h_candidate = np.maximum(h0 + h_shift + x**2/(2*R) + defl + htex, h_floor)
+        h = np.maximum(relax_h*h + (1.0-relax_h)*h_candidate, h_floor)
 
     # Final pass & dimensional fields
     p = embed_p(P_core)
     # Consistency update: compute final deflection once (no ex-post scaling)
     defl_final = elastic_deflection(x, p)
-    h = np.maximum(h0 + x**2/(2*R) + defl_final + htex, 5e-9)
+    h = np.maximum(h0 + h_shift + x**2/(2*R) + defl_final + htex, h_floor)
 
 # Mixed loads
     p_asp_final = asperity_pressure_greenwood_tripp(h)
-    Wa_final = np.trapezoid(p_asp_final, x) * L
-    Wh_now   = np.trapezoid(p, x) * L
+    Wa_raw = np.trapezoid(p_asp_final, x) * L
+    Wh_now = np.trapezoid(p, x) * L
+    load_deficit = W - Wh_now
+    if load_deficit > 1e-12 and Wa_raw > 1e-12:
+        scale_asp = np.clip(load_deficit/(Wa_raw + 1e-30), 0.0, 5.0)
+        p_asp_final = p_asp_final * scale_asp
+        Wa_final = np.trapezoid(p_asp_final, x) * L
+    elif load_deficit > 1e-12 and Wa_raw <= 1e-12:
+        Wa_final = load_deficit
+    else:
+        Wa_final = np.maximum(Wa_raw + min(load_deficit, 0.0), 0.0)
 
     # === Friction (hydrodynamic + boundary) ===
     eta_w, _dT_f = eta_houpert(p, TEMP_C, Ve, h, a)
@@ -522,7 +561,8 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     Fb = L * np.trapezoid( mu_b * p_asp_final, x)
 
     return {"x": x, "p": p, "h": h, "Fh": float(Fh), "Fb": float(Fb),
-            "Wa": float(Wa_final), "a": float(a), "pmax": float(np.max(p))}
+            "Wa": float(Wa_final), "a": float(a), "pmax": float(np.max(p)),
+            "h_shift": float(h_shift)}
 
 # ============================================================
 # PLOT CONTROLLER & UTILITIES 
@@ -557,10 +597,10 @@ PLOT_OPTS = {
     },
     "AVG_TORQUE": {"ENABLE": False, "rpms": [300, 500, 700, 900], "surface_state": 0, "texture_densities": [8],},
     "AVG_TORQUE_REDUCTION": {"ENABLE": False, "rpms": [300, 500], "densities_vs_UN": [5],},
-    "HTEX_300RPM": {"ENABLE": True, "texture_densities": [5, 8, 10], "style": {"lw": 2.0, "grid_alpha": 0.35},},
+    "HTEX_300RPM": {"ENABLE": False, "texture_densities": [5, 8, 10], "style": {"lw": 2.0, "grid_alpha": 0.35},},
     # ---------------- NEW: Single-variable vs angle (Ve, Vs, W, R, a_hertz, ph, hc) ----------------
     "VARIABLE_BY_ANGLE": {
-        "ENABLE": True,                 # set True to plot
+        "ENABLE": False,                 # set True to plot
         "variable": "hc",                # one of: "Ve","Vs","W","R","a_hertz","ph","hc"
         "rpms": [300],              # single RPM or list
         "style": {"lw": 2.0, "grid_alpha": 0.35, "dpi": 120},
