@@ -1,15 +1,21 @@
-Read deeply every paragraph, equation and figures in research article "mixed_lubrication.pdf" in my repository. It is related to EHL/mixed lubrication line contact including asperity model. 
+Read and analyze every line of python code text file "python_seventeen.txt" which related to friction torque reduction in CAM and flat faced follower using 1D Mixed lubrication Line contact theory.
+and cam lift data as "updated_lift.txt".
 
-Your task is to generate a complete error free ready to paste google colab code that solve complete non-dimensional reynolds equation in eq. 9 from pdf using simutanelously other equations including eqs. 5, 6,7, 11, 13, 17 etc. The code should plot same non-dimensional hydrodynamic pressure Ph vs X, non-dimensional asperity pressure Pa vs X, and non-dimensional film thickness H vs X separately three graphs for only:
-U = 1e-11, W = 1e-4, G= 4500, V = 0.01
-Sigma = 2e-5, lam = 1.01.
-Suppose parameter values by yourself which are not given in pdf paper.
-**DO NOT simplify anything. Do not make anything shorter. You have to read the entire pdf and its equations and relevant pubslished research article to achieve the target.***
- You can only have one right that if you want you can skip the last two terms of nondimensional asperity pressure Pa in equation 17 and only include elastic term of asperity. Other than that you are not allow to make any simplification.
-***NUMERICAL PROCEDURE:***
-The governing Eqs. (9), (11), (13), and (17) are discretized using the finite-difference method and solved simultaneously for pressure and film profile. The input dimensionless parameters are W, U, G, r, b, and V. For N nodes, the system consists of N equations and N unknowns. N-1 equations come from the Reynolds equation, Eq. (9), and one from the load balance, Eq. (11). The unknowns are H00, Kr, and the hydrodynamic pressure at nodes 2 to N-1 (the pressure is zero at the boundaries, i.e., nodes 1 and N).
-A fully flooded inlet is assumed by choosing Xmin = -4. The outlet is placed a few nodes after X = 1, where the hydrodynamic pressure and its gradient are zero. To evaluate the elastic-deformation integral in Eq. (13). A forward finite difference is used to solve the equations, and the Newton–Raphson algorithm is applied since the equations are nonlinear.
-After assigning initial guesses, the film thickness at each node is obtained from Eq. (13), and the asperity pressure is calculated using Eq. (17). The Jacobian matrix is then formed, and by solving the system of equations, the hydrodynamic pressure at each node, as well as Kr and H00, are calculated. The film thickness is updated using the new total pressure, and the iterations continue until the results converge. The error is defined as ||P(i+1) - P(i)|| / ||P(i)||, where i is the iteration number. The iteration process continues until the error is smaller than a specified tolerance, typically 5e-5.
-The accuracy of the results is ensured by refining the mesh until further changes become negligible. If the mesh is not fine enough, the computed film thickness is smaller than its actual value. Moreover, accurate prediction of the pressure spike and the minimum film thickness requires refinement around the spike region, just before the outlet. The refinement increases from inlet to outlet following an exponential trend to prevent numerical inaccuracies. In general, when dealing with high loads, more nodes are required to ensure convergence and accuracy. The total number of nodes used in simulations is typically between about 500, depending on the load. Because of the large number of nodes, an under-relaxation factor is implemented to improve convergence in each step. In addition, the asperity pressure (especially at high surface roughness) can introduce instability, so a separate under-relaxation factor is applied to the asperity pressure in each iteration.
-***TESTING CRITERIA:***
-once complete code generated then run the entire code and visualize all the graphs by yourself. Do not generate graphs for me. If these graphs profiles 100% match the pdf paper and meet the standard (and NO shrinkages, irregular spikes, pointed tops etc errors) and Converges smoothly then generate only complete ready to paste script for me. If not, then find the issues and fix them.
+PROBLEM:
+1) The current code generate incorrect profile of asperity friction Fb vs cam angle. Current code is generating minimum friction during cam nose region (around cam angle -35° to 35°) which is incorrect.
+
+TASK:
+Deeply analyze the code especially the reynolds solver section and find the exact issue and fix it.  Analyze the film thickness at each cam angle how lamda is changing and effecting asperity pressure. Analyze every scaling, variable, sign, clipping, loop and everything etc. etc. in reynolds solver to find the exact cause and fix it.
+
+TESTING /ACCEPTANCE CRITERIA:
+Generate only updated complete script (changed lines + unchanged lines in single script) if and only if:
+
+1) Hydrodynamic friction is minimum at cam nose region and peaks at both cam flanks and decrease away from both flanks
+2) Asperity pressure maximum at cam nose region and decreasing away frkm nose (belly)
+3)  The reynolds pressure smoothly converged and lying on its contact domain.
+
+If not Keep improving and keep analyzing by yourself 
+
+HARD STRICT RULES:
+1) *DO NOT* change the formulas of kinematics section. 
+2) *DO NOT* change the values of fixed parameters at TOP of the code section (Material/geometry/fluid)
