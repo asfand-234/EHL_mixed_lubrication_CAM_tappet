@@ -1,5 +1,10 @@
-Read python code in text file "python_slippy.txt" which is related to complete mixed lubrication/EHL solution of reynolds equation.
+***NEW INSTRUCTIONS (with additon of below old instructions)***
 
+1) Do not create multiple .py files/script. Your final script must be a single complete ready to paste google colab code.
+2) Do not simplify everything. Make it perfect.
+3) You can also take help from other codes open available on www.git.hub.com for references.
+***OLD INSTRUCTIONS***
+Read python code in text file "python_slippy.txt" which is related to complete mixed lubrication/EHL solution of reynolds equation.
 TASK:
 Your task is to:
 1) Run the entire script and find the errors and fix them all. 
