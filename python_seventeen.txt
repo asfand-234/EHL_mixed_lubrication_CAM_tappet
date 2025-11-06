@@ -14,7 +14,7 @@ plt.rcParams.update({"figure.dpi": 120})
 # =======================
 # USER: set test temperature (°C) 
 # =======================
-TEMP_C = 90  # <-- set to 60, 90, or 110 before running
+TEMP_C = 60  # <-- set to 60, 90, or 110 before running
 def _load_cam(data_dir, fname):
     path = os.path.join(data_dir, fname)
     _cam = pd.read_csv(
@@ -46,23 +46,23 @@ E_star   = 217e9        # [Pa]
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
-ETA0_TABLE     = {60: 0.04096, 90: 0.01381, 110: 0.008155}    # Pa·s
-ALPHA0_TABLE   = {60: 20e-9,   90: 13e-9,    110: 10e-9}      # Pa^-1
+ETA0_TABLE     = {60: 0.04496, 90: 0.01381, 110: 0.008155}    # Pa·s
+ALPHA0_TABLE   = {60: 21e-9,   90: 16e-9,    110: 10e-9}      # Pa^-1
 RHO0_TABLE     = {60: 887.0,   90: 858.44,   110: 840.0}      # kg/m^3
-MU_B_TABLE     = {60: 0.13,    90: 0.12,     110: 0.11}
-GAMMA_LIM_TABLE= {60: 0.08,    90: 0.07,     110: 0.06}       # 1/Pa
-LAM_C_TABLE    = {60: 7e-6,    90: 3.5e-6,   110: 2.0e-6}
+MU_B_TABLE     = {60: 0.12,    90: 0.11,     110: 0.10}
+GAMMA_LIM_TABLE= {60: 0.07,    90: 0.06,     110: 0.06}       # 1/Pa
+LAM_C_TABLE    = {60: 3.5e-6,    90: 3.0e-6,   110: 2.0e-6}
 N_C_TABLE      = {60: 0.85,    90: 0.65,     110: 0.52}
-PHI_IN_TABLE   = {60: 0.5,     90: 0.60,     110: 0.7}
-ETA_INF_TABLE  = {60: 0.010,   90: 0.006,    110: 0.004}
+PHI_IN_TABLE   = {60: 0.6,     90: 0.60,     110: 0.7}
+ETA_INF_TABLE  = {60: 0.020,   90: 0.006,    110: 0.004}
 
 BETA0_CONST    = 0.68
 P0_HOUPERT     = 1.98e8
 C_ROELANDS     = 5.1e-9
 T_SHIFT        = 138.0
 
-K_THERM_TABLE  = {60: 0.14, 90: 0.14, 110: 0.14}
-GAMMA_TH_TABLE = {60: 6.5e-4, 90: 6.5e-4, 110: 6.5e-4}
+K_THERM_TABLE  = {60: 0.10, 90: 0.14, 110: 0.14}
+GAMMA_TH_TABLE = {60: 3.5e-4, 90: 6.5e-4, 110: 6.5e-4}
 
 if TEMP_C not in (60, 90, 110):
     raise ValueError("TEMP_C must be one of {60, 90, 110}.")
@@ -80,17 +80,17 @@ k_lub     = K_THERM_TABLE[TEMP_C]
 gamma_th  = GAMMA_TH_TABLE[TEMP_C]
 
 # ============================================================
-# Textured-only flash temperature & traction (calibration params; guesses)
+#flash temperature & traction (calibration params)
 # ============================================================
-F0_COVERAGE_TABLE   = {60: 0.9, 90: 0.92, 110: 0.92}
-NF_COVERAGE_TABLE   = {60: 1.0,  90: 2.0,  110: 2.0}
-CHI_TEX_TABLE       = {60: 0.55, 90: 0.45, 110: 0.40}
-BETA_EDGE_TABLE     = {60: 1.10, 90: 1.10, 110: 1.10}
-K_EFF_TABLE         = {60: 60.0, 90: 45.0, 110: 45.0}
-BETA_ETA_FLASH_TABLE= {60: 0.018, 90: 0.020, 110: 0.022}
-C_LSS_TEX_TABLE     = {60: 0.03,  90: 0.07,  110: 0.06}
-M_LSS_TEX           = 1.0
-KAPPA_SRR_TABLE     = {60: 0.10, 90: 0.30, 110: 0.30}
+F0_COVERAGE_TABLE   = {60: 0.8, 90: 0.92, 110: 0.92}   #[0-1]
+NF_COVERAGE_TABLE   = {60: 1.0,  90: 2.0,  110: 2.0}   #[1-3]
+CHI_TEX_TABLE       = {60: 0.25, 90: 0.45, 110: 0.40}  #[0.2-0.8]
+BETA_EDGE_TABLE     = {60: 1.10, 90: 1.10, 110: 1.10}  #[1-1.5]
+K_EFF_TABLE         = {60: 30.0, 90: 45.0, 110: 45.0}  #[20-60]
+BETA_ETA_FLASH_TABLE= {60: 0.018, 90: 0.020, 110: 0.022} #[0.015–0.030]
+C_LSS_TEX_TABLE     = {60: 0.03,  90: 0.07,  110: 0.06}  #[0.06–0.12]
+M_LSS_TEX           = 0.8
+KAPPA_SRR_TABLE     = {60: 0.10, 90: 0.30, 110: 0.30}   #[0.1-0.5]
 F0_COVERAGE = F0_COVERAGE_TABLE[TEMP_C]
 NFCOV       = NF_COVERAGE_TABLE[TEMP_C]
 CHI_TEX     = CHI_TEX_TABLE[TEMP_C]
@@ -99,14 +99,38 @@ K_EFF       = K_EFF_TABLE[TEMP_C]
 BETA_ETA_F  = BETA_ETA_FLASH_TABLE[TEMP_C]
 C_LSS_TEX   = C_LSS_TEX_TABLE[TEMP_C]
 KAPPA_SRR   = KAPPA_SRR_TABLE[TEMP_C]
-MASK_THR_MULT = 4.0
+MASK_THR_MULT = 4.0   #[3-10]
+# ============================================================
+#Stribeck-Gated Texture Synergy (SGTS)(calibration params)
+# ============================================================
+# Gate constants 
+LAM_STAR   = 1.00   # film parameter transition ~ mixed/EHL 0.8-1.2
+DELTA_LAM  = 0.35   # smoothness of transition 0.2-0.6
+S0_SGTS    = 0.15   # SRR soft-saturation (global) 0.1-0.3
+                                                            #A_SGTS [-0.4 to 0.5]
+A_SGTS_TABLE = {
+    60:  {300: 0.5, 500: 0.33, 700: -0.23, 900: -0.1}, 
+    90:  {300: 0.3, 500: 0.10, 700: 0.50, 900: -0.20},
+    110: {300: -0.10, 500: 0.20, 700: -0.20, 900: 0.50},
+}
 
+def _get_A_sgts(temp, rpm):
+    """Fetch A_SGTS from table by nearest rpm key; return 0.0 if missing."""
+    tbl = A_SGTS_TABLE.get(int(temp), {})
+    if not tbl:
+        return 0.0
+    if rpm in tbl:
+        return float(tbl[rpm])
+    # choose nearest key if not exact
+    ks = sorted(tbl.keys())
+    nearest = min(ks, key=lambda k: abs(k - rpm))
+    return float(tbl[nearest])
 # ============================================================
 # Greenwood–Tripp constants 
 # ============================================================
-sigma_combined = 0.24e-6
+sigma_combined = 0.2e-6
 beta_a         = sigma_combined/0.001
-eta_R          = (0.053/(sigma_combined*beta_a))
+eta_R          = (0.05/(sigma_combined*beta_a))
 
 # GT F_{3/2} lookup (pressure/load)
 _gt_w = np.linspace(0.0, 8.0, 400)
@@ -202,7 +226,7 @@ def central_film_thickness(R, W, Ve):
     G = alpha0 * E_star
     W_star = W / (E_star * L * R + 1e-30)
     hc = 3.06 * (U**0.69) * (G**0.56) * (W_star**-0.1) * R
-    return float(np.clip(hc, 5e-9, 600e-9))
+    return float(np.clip(hc, 5e-9, 600e-8))
 
 
 # ============================================================
@@ -234,7 +258,8 @@ def elastic_deflection(x, p):
     u = np.zeros_like(x)
     for i in range(N):
         u[i] = np.sum(p * np.log(np.sqrt((x[i]-x)**2 + eps*eps))) * dx
-    u *= (2.0/(np.pi*E_star))
+    u = u * (2.0/(np.pi*E_star))
+    # Remove the mean to anchor the displacement; only relative deflection matters.
     u -= np.mean(u)
     return u
 
@@ -247,7 +272,22 @@ def rusanov_div_bc(u, q, dx, q_in_left, q_in_right):
     qL[1:] = q; qR[:-1] = q
     qL[0] = q_in_left; qR[0] = q[0]
     qL[-1] = q[-1];     qR[-1] = q_in_right
-    F = 0.5*(u*(qL+qR)) - 0.5*np.abs(u)*(qR - qL)
+
+    # Rusanov flux for f(q) = u*q
+    F = 0.5*(u*(qL + qR)) - 0.5*np.abs(u)*(qR - qL)
+    return (F[1:] - F[:-1])/(dx + 1e-30)
+def rusanov_dqdx_bc(q, dx, q_in_left, q_in_right, alpha=1.0):
+    N = len(q)
+    qL = np.empty(N+1); qR = np.empty(N+1)
+    # interior reconstructions
+    qL[1:] = q;       qR[:-1] = q
+    # ghost boundaries
+    qL[0]  = q_in_left;   qR[0]  = q[0]
+    qL[-1] = q[-1];       qR[-1] = q_in_right
+    # Rusanov flux for f(q)=q with wavespeed alpha
+
+    # Rusanov flux for f(q) = u*q
+    F = 0.5*(qL + qR) - 0.5*alpha*(qR - qL)
     return (F[1:] - F[:-1])/(dx + 1e-30)
 
 # ============================================================
@@ -327,7 +367,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         dx = x[1] - x[0]
 
     # Core ND grid
-    S_WIN = 1.2
+    S_WIN = 1.3
     s  = np.linspace(-S_WIN, S_WIN, int(M_core))
     xs = a * s
     dS = s[1] - s[0]
@@ -358,7 +398,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         return p_full
 
     # Smoother weights
-    K0, K1 = 0.92, 0.025
+    K0, K1 = 0.95, 0.025
 
     # Substepping for modest squeeze approximation & stability
     u1_local = np.abs(Ve)
@@ -493,6 +533,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         P_core[0]  = 0.0
         P_core[-1] = 0.0
 
+       
         p_prev = embed_p(P_core).copy()
 
         # Update film (elastic + texture)
@@ -557,6 +598,28 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             tau_eff[mask_tex] = np.minimum(tau_tot_tex[mask_tex], tau_lim_tex[mask_tex])
     # ---------------------------------------------------------------------------------------
 
+    # ------------------ NEW: TEXTURED-ONLY SGTS (Temp × RPM) -------------------------------
+    # Applies AFTER flash block; untextured path unaffected (atex_theta==0 ⇒ skip).
+    if atex_theta > 0.0:
+        mask_tex, f_cov = _texture_mask_and_coverage(x, a, atex_theta, shift_theta, d_texture, htex, MASK_THR_MULT)
+        if f_cov >= F0_COVERAGE and np.any(mask_tex):
+            # Film-parameter (Stribeck) gate from seed central film
+            lam_seed = h0 / (sigma_combined + 1e-30)
+            G_lambda = np.tanh((LAM_STAR - lam_seed) / (DELTA_LAM + 1e-30))
+            # SRR soft-saturation (temperature-agnostic; global)
+            SRR = np.abs(Vs) / (np.abs(Ve) + 1e-30)
+            G_SRR = SRR / (SRR + S0_SGTS)
+            # Total gate (include coverage exponent)
+            G_gate = G_lambda * (f_cov**NFCOV) * G_SRR
+
+            # Temperature × RPM amplitude (12 entries)
+            A_sgts = _get_A_sgts(TEMP_C, int(round(rpm)))
+            S_sgts = np.clip(A_sgts * G_gate, -0.95, 0.95)
+
+            # Apply to textured nodes only
+            tau_eff[mask_tex] *= (1.0 - S_sgts)
+    # ---------------------------------------------------------------------------------------
+
     Fh = np.trapezoid(tau_eff, x) * L
     Fb = L * np.trapezoid( mu_b * p_asp_final, x)
 
@@ -596,7 +659,7 @@ PLOT_OPTS = {
         "style": {"lw": 2.0, "grid_alpha": 0.35, "dpi": 120},
     },
     "AVG_TORQUE": {"ENABLE": False, "rpms": [300, 500, 700, 900], "surface_state": 0, "texture_densities": [8],},
-    "AVG_TORQUE_REDUCTION": {"ENABLE": False, "rpms": [300, 500], "densities_vs_UN": [5],},
+    "AVG_TORQUE_REDUCTION": {"ENABLE": True, "rpms": [300, 500,700,900], "densities_vs_UN": [5,8],},
     "HTEX_300RPM": {"ENABLE": False, "texture_densities": [5, 8, 10], "style": {"lw": 2.0, "grid_alpha": 0.35},},
     # ---------------- NEW: Single-variable vs angle (Ve, Vs, W, R, a_hertz, ph, hc) ----------------
     "VARIABLE_BY_ANGLE": {
