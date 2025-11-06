@@ -636,14 +636,14 @@ def _as_list(v):
 PLOT_OPTS = {
     "PROFILES": {
         "PRESSURE": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": [10],
             "rpms": [300],
             "surface_state": 0,         # 0 = UNTEXTURED, 1 = TEXTURED
             "texture_densities": [8],
         },
         "FILM": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": [10],
             "rpms": [300],
             "surface_state": 0,
@@ -652,14 +652,14 @@ PLOT_OPTS = {
         "style": {"lw": 2.0, "grid_alpha": 0.35, "dpi": 120},
     },
     "SWEEPS": {
-        "Fh": {"ENABLE": True, "angles_deg": None, "rpms": [300], "surface_state": 0, "texture_densities": [8],},
-        "Fb": {"ENABLE": True, "angles_deg": None, "rpms": [300], "surface_state": 0, "texture_densities": [8],},
+        "Fh": {"ENABLE": False, "angles_deg": None, "rpms": [300], "surface_state": 0, "texture_densities": [8],},
+        "Fb": {"ENABLE": False, "angles_deg": None, "rpms": [300], "surface_state": 0, "texture_densities": [8],},
         "Torque": {"ENABLE": False, "angles_deg": None, "rpms": [300,500], "surface_state": 0, "texture_densities": [8],},
         "Wa": {"ENABLE": False, "angles_deg": None, "rpms": [300], "surface_state": 0, "texture_densities": [8],},
         "style": {"lw": 2.0, "grid_alpha": 0.35, "dpi": 120},
     },
     "AVG_TORQUE": {"ENABLE": False, "rpms": [300, 500, 700, 900], "surface_state": 0, "texture_densities": [8],},
-    "AVG_TORQUE_REDUCTION": {"ENABLE": True, "rpms": [300, 500,700,900], "densities_vs_UN": [5,8],},
+    "AVG_TORQUE_REDUCTION": {"ENABLE": True, "rpms": [300, 500,700,900], "densities_vs_UN": [5],},
     "HTEX_300RPM": {"ENABLE": False, "texture_densities": [5, 8, 10], "style": {"lw": 2.0, "grid_alpha": 0.35},},
     # ---------------- NEW: Single-variable vs angle (Ve, Vs, W, R, a_hertz, ph, hc) ----------------
     "VARIABLE_BY_ANGLE": {
@@ -1079,4 +1079,5 @@ def run_all():
 # ----- Execute -----
 if __name__ == "__main__":
     run_all()
+
 
