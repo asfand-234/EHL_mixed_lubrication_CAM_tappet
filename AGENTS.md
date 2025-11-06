@@ -1,28 +1,48 @@
-Read and analyze every line of python code text file "python_seventeen.txt" which related to friction torque reduction in CAM and flat faced follower using 1D Mixed lubrication Line contact theory.
-and cam lift data as "updated_lift.txt".
-PROBLEM:
-1) The current code generate reynolds pressure profile little bit condense, pressure is shifted to left side and not stable. And pressure data lying somewhere between x=-2 to x = 0. Which is incorrect. 
-2) The film thickness vs x axis profile is not as per standard. There is no flat region at contact zone. 
-TASK:
-Deeply analyze the code especially the reynolds solver section and find the exact issue and fix it.  Analyze the film thickness at each cam angle and other input vriables of reynolds. Analyze every term of reynolds (RHS, D_core, D_full etc.). Analyze every scaling, variable, sign, clipping, loop and everything etc. etc. in reynolds solver to find the exact cause and fix it.
-Deep studu from standard relevant literature and also from git.hub available sample codes.
+Read and analyze every line of python code text file "python_seventeen.txt" which related to friction torque reduction due to surface textures in CAM and flat faced follower using 1D Mixed lubrication Line contact theory.
+and CAM lift data file named "updated.lift.txt"
 
-TESTING /ACCEPTANCE CRITERIA:
-Generate only updated complete script (changed lines + unchanged lines in single script) if and only if:
+TASK: 
+Your task is to calibrate only "flash temperature & traction parameters and stribeck gated texture synergy parameters given at the top of code for ONLY 60° to meet the target values of percentage reduction of Average friction torque with respect to untextured for only 5% texture area density and for four RPMs i.e. 300, 500, 700, 900.
 
-1) on non- dimensional X domain the contact zone is -1 to 1. So pressure must lie *ON* -1 to 1 not *within* it. And away from it must be zero as per standard Mixed lubrication/EHL line contact theory. Which means the pressure data must have zero values away from X =-1 and X= 1. (With a little mergen is accpetable upto X = - 1.2 to X = 1.2). And the pressure profile must be standard (belly shape or quite hertzian similar shape). In data it means the pressure values start increase from X = -1 towards center (X =0) and also pressure data increase from x= 1 towards center.
-Check data/plot for differenr CAM angles randomly (untextured case). If it meets the target then Switch on surface texture state for like 10% texture area density and run for only cam angles -19° and -20° and check the pressure data if any pressure value does not leak outside the contact zone then it is acceptable. If not, then try to stablize it for onlu untextured scenario. 
-NOTE: For untextuted scenario the pressure must start from Left boundary (X= -1.2) and ends ON right boundary (X = 1
-2). But for textured case, the only acceptance criteria is the pressure must not leak out of the X domain it doesn't how it is behaving inside. 
+Target Values:
+RPM       % AV. friction Torque reduction
+300         -8%
+500        -13%     
+700         -18%
+900         -24%
 
-2) As per standard theory, film thickness h profile remain almost constant within Contact zone and exponentially increasing when moving left contact boundary -a to  towards X_in. Due to elastic deflection and h0 values at each cam angle. And at center film thickness must be less than 0.2e6 m.  Deep analyze and find fhe exact cause and fix it.
+NOTE: Negative sign means, the average friction torque is increasing due to surface textures. 
 
-When the criteria 1 and 2 is achieved and rjn the script and analyze the data for hydrodynamic friction vs cam angle and asperith friction vs cam angle so that,
+IMPLEMENTATION STRATEGY:
+1) Start first tuning Flash Temperature parameters for 60°C only and for only 5% texture area density and for 300 RPM
+ Once fitted then these must be constant for all RPMs and for all texture area densities. 
+Parameters:                   Range Limit:
+F0_COVERAGE_TABLE   =        [0-1]
+NF_COVERAGE_TABLE   =         [1-3]
+CHI_TEX_TABLE       =         [0.2-0.8]
+BETA_EDGE_TABLE     =        [1-1.5]
+K_EFF_TABLE         =          [20-70]
+BETA_ETA_FLASH_TABLE=       [0.015–0.030]
+C_LSS_TEX_TABLE     =       [0.06–0.16]
+KAPPA_SRR_TABLE     =        [0.1-0.6]
+MASK_THR_MULT =             [3-12]
+2) When you see the results are slightly better then start tuning SGTS gate parameters. When these once fitted then these Must remain constant for all RPMs and all texture area densities.
+SGTS Gate parameters:                 Range Limit
+LAM_STAR   =                           [0.8-1.2]
+DELTA_LAM  =                           [0.2-0.6]
+S0_SGTS    =                           [0.1-0.3]
 
-3) Hydrodynamic friction must be minimum at cam nose region and peaks at both cam flanks and decrease away from both flanks
-4) Asperity pressure must be maximum at cam nose region and decreasing away from nose (belly)
-If any of above 4 criteria does not meet then keep improving and keep analyzing.
+3) Then Start tuning A_SGTS parameters.
+Every RPM must have its own fitted value.
+RPM     A_SGTS Range Limit
+300        [-0.6 to 0.8]
+500        [-0.6 to 0.8]
+700        [-0.6 to 0.8]
+900        [-0.6 to 0.8]
+
+4) If the results are not 70% close to the target values then re-start again from tuning flash temperature parameter and keep repeating all above 3 steps until you get at least 70% same target results.
+5) Once the target achieved then only and only generate most suitable fitted values for all above parameters in summary.
 
 HARD STRICT RULES:
-1) *DO NOT* change the formulas of kinematics section. 
-2) *DO NOT* change the values of fixed parameters at TOP of the code section (Material/geometry/fluid)
+1) You are not allowed to make any change in any line of the code. Also do not change any other parameter values other than above mentioned.
+2) Do not use any above parameter value out of the defined ranges
