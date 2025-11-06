@@ -14,7 +14,7 @@ plt.rcParams.update({"figure.dpi": 120})
 # =======================
 # USER: set test temperature (°C) 
 # =======================
-TEMP_C = 60  # <-- set to 60, 90, or 110 before running
+TEMP_C = 90  # <-- set to 60, 90, or 110 before running
 def _load_cam(data_dir, fname):
     path = os.path.join(data_dir, fname)
     _cam = pd.read_csv(
@@ -1079,3 +1079,4 @@ def run_all():
 # ----- Execute -----
 if __name__ == "__main__":
     run_all()
+
