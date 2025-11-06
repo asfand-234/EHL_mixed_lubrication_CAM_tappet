@@ -1,9 +1,4 @@
-***NEW INSTRUCTIONS (with additon of below old instructions)***
 
-1) Do not create multiple .py files/script. Your final script must be a single complete ready to paste google colab code.
-2) Do not simplify everything. Make it perfect.
-3) You can also take help from other codes open available on www.git.hub.com for references.
-***OLD INSTRUCTIONS***
 Read python code in text file "python_slippy.txt" which is related to complete mixed lubrication/EHL solution of reynolds equation.
 TASK:
 Your task is to:
@@ -29,9 +24,12 @@ Average asperity tip radius = beta_a = 2e-4 average summit radius =  k = 2e-4
 Asperity distribution per unit area = eta_R = 1.25e9
 4) Make sure the script must plot only non-dimensional reynolds pressure vs X axis, and Non-dimensional film thickness vs X axis seperately in two graphs. No other reference plot should be there.
 
-3) once script organized and converged then analyze both the profiles and their data. Their profile must meet the standard mixed lubrication/EHL Line contact reynolds (dome like or hertzian shape on X = -1 to X = 1 and away from it pressure must be zero. And pressure peak should be P = 1). Make sure reynolds pressure must not be shrink/shifted towards one side rather it must be stable with true hydrodynamic behaviour.
+5) once script organized and converged then analyze both the profiles and their data. Their profile must meet the standard mixed lubrication/EHL Line contact reynolds (dome like or hertzian shape on X = -1 to X = 1 and away from it pressure must be zero. And pressure peak should be P = 1). Make sure reynolds pressure must not be shrink/shifted towards one side rather it must be stable with true hydrodynamic behaviour.
+   1) Do not create multiple .py files/script. Your final script must be a single complete ready to paste google colab code.
+6) Do not simplify everything. Make it perfect.
+7) You can also take help from other codes open available on www.git.hub.com for references.
 
  and film thickness profile must be as per standard literature (flat constant on contact zone from X = -1 to X = 1 and increasing exponentially towards inlet domin boundary).
-4) If solution smoothly converge and both profiles are 100% correct then remove unnecessary code lines, comments and any extra lines which are not the part of solution from raw code.
+8) If solution smoothly converge and both profiles are 100% correct then remove unnecessary code lines, comments and any extra lines which are not the part of solution from raw code.
 
-5) Then finally generate complete ready to paste google colab script. Do not show me changes/diff. Just provide me complete final updated code without hidden (@@) lines.
+9) Then finally generate complete ready to paste google colab script. Do not show me changes/diff. Just provide me complete final updated code without hidden (@@) lines.
