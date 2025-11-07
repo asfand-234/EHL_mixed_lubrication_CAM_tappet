@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import math
-import pathlib
 from dataclasses import dataclass
 from typing import Dict
 
 import numpy as np
 import scipy.fft as fft
+import matplotlib.pyplot as plt
+
+
 # ============================================================
-# Small utility
+# Utilities
 # ============================================================
 
 def trapz(y: np.ndarray, x: np.ndarray) -> float:
-    # Compatible across NumPy versions
+    """Simple wrapper to ensure float output."""
     return float(np.trapz(y, x))
 
 
@@ -44,20 +46,19 @@ def solve_tridiagonal(
 
 
 # ============================================================
-# Lubricant model: Roelands + Dowson–Higginson
+# Lubricant: Roelands viscosity + Dowson–Higginson density
 # ============================================================
 
 @dataclass
 class Lubricant:
-    mu0: float        # reference viscosity [Pa·s]
-    alpha: float      # pressure-viscosity coefficient [1/Pa]
-    rho0: float       # reference density [kg/m^3]
+    mu0: float
+    alpha: float
+    rho0: float
     p_ref: float = 0.0
 
     mu_min_ratio: float = 1e-5
     mu_max_ratio: float = 1e3
 
-    # Typical Dowson–Higginson
     dh_a: float = 0.59e-9
     dh_b: float = 1.34e-9
 
@@ -65,11 +66,9 @@ class Lubricant:
         p_eff = np.asarray(p, float) - self.p_ref
         z = self.alpha * p_eff
         mu = self.mu0 * np.exp(z / (1.0 + 0.5 * z))
-        return np.clip(
-            mu,
-            self.mu0 * self.mu_min_ratio,
-            self.mu0 * self.mu_max_ratio,
-        )
+        return np.clip(mu,
+                       self.mu0 * self.mu_min_ratio,
+                       self.mu0 * self.mu_max_ratio)
 
     def density(self, p: np.ndarray) -> np.ndarray:
         p_eff = np.asarray(p, float) - self.p_ref
@@ -77,7 +76,7 @@ class Lubricant:
 
 
 # ============================================================
-# Roughness: Greenwood–Tripp asperity model (Arcoumanis F5/2)
+# Roughness: Greenwood–Tripp with Arcoumanis F5/2 fit
 # ============================================================
 
 @dataclass
@@ -87,7 +86,7 @@ class Roughness:
     asperity_radius: float
 
     def F52(self, lam: np.ndarray) -> np.ndarray:
-        """Arcoumanis polynomial fit of Greenwood–Tripp F_{5/2}(λ)."""
+        """Arcoumanis polynomial for Greenwood–Tripp F_{5/2}(λ)."""
         lam = np.asarray(lam, float)
         lam_c = 2.224
         lc = np.clip(lam, 0.0, lam_c)
@@ -133,7 +132,7 @@ class SolidMaterial:
 
     @property
     def reduced_modulus(self) -> float:
-        return self.youngs_modulus / (1.0 - self.poisson_ratio ** 2)
+        return self.youngs_modulus / (1.0 - self.poisson_ratio**2)
 
 
 @dataclass
@@ -153,19 +152,19 @@ class SimulationGrid:
 @dataclass
 class Kinematics:
     entrainment_speed: float   # Ue
-    relative_speed: float      # Urel (kept for completeness)
+    relative_speed: float      # Urel (not used here but kept)
 
 
 @dataclass
 class SolverControls:
-    max_ehl_iterations: int = 50
-    max_reynolds_iterations: int = 200   # (not used in transient; kept for compat)
+    max_ehl_iterations: int = 80
+    max_reynolds_iterations: int = 200  # reserved
     reynolds_tol: float = 1e-5
-    load_tol: float = 5e-2               # relative
+    load_tol: float = 2e-2
     relaxation_p: float = 0.6
-    relaxation_hc: float = 0.4
-    transient_dt: float = 1e-4           # pseudo-time step for Reynolds
-    max_time_steps: int = 4000           # max pseudo-time steps per EHL iter
+    relaxation_hc: float = 0.6
+    transient_dt: float = 1e-4
+    max_time_steps: int = 4000
 
 
 @dataclass
@@ -225,7 +224,7 @@ def elastic_deflection(p: np.ndarray, K_fft: np.ndarray, dx: float) -> np.ndarra
 
 
 # ============================================================
-# Transient Reynolds equation (pseudo-time stepping)
+# Transient Reynolds solver (pseudo-time stepping)
 # ============================================================
 
 def solve_reynolds_transient(
@@ -234,16 +233,18 @@ def solve_reynolds_transient(
     p_init: np.ndarray,
 ) -> np.ndarray:
     """
-    Pseudo-transient solution of compressible Reynolds:
-        ∂p/∂τ + R(p) = 0
+    Pseudo-transient form:
+        (p^{n+1} - p^n)/Δt + R(p^{n+1}) = 0
 
-    Backward Euler in pseudo-time:
-        (p^{n+1} - p^n)/Δτ + R(p^{n+1}) = 0
+    R(p) from
+        d/dx( M dp/dx ) = d/dx(ρ h Ue)
 
-    R(p) is the steady Reynolds residual with:
-      - p = max(p_ambient, p_cav) at both ends,
-      - cavitation floor p >= p_cav,
-      - no artificial symmetry/dome.
+    Discretization:
+      M_e(p_{j+1}-p_j) - M_w(p_j-p_{j-1}) = Δx (Ce - Cw)
+    with:
+      - p = max(p_ambient, p_cav) at both ends (Dirichlet),
+      - p >= p_cav everywhere (cavitation),
+      - no artificial symmetry or dome enforcement.
     """
     g = params.grid
     lub = params.lubricant
@@ -266,17 +267,17 @@ def solve_reynolds_transient(
         h_eff = np.maximum(h, 1e-12)
         M = rho * h_eff**3 / (12.0 * mu)
 
-        # Face-centered properties
+        # Face-centered M and (ρ h Ue)
         M_face = np.zeros(n - 1)
         RhU_face = np.zeros(n - 1)
+
         for j in range(n - 1):
             Mw = max(M[j], 1e-20)
             Me = max(M[j + 1], 1e-20)
             M_face[j] = 2.0 / (1.0 / Mw + 1.0 / Me)
-            # Advective term: (ρ h Ue) at faces
             RhU_face[j] = 0.5 * (rho[j] * h_eff[j] + rho[j + 1] * h_eff[j + 1]) * Ue
 
-        # Build steady Reynolds operator A_ss p = b_ss
+        # Build steady operator A_ss p = b_ss
         A_diag = np.zeros(n)
         A_lower = np.zeros(n - 1)
         A_upper = np.zeros(n - 1)
@@ -293,13 +294,10 @@ def solve_reynolds_transient(
             Cw = RhU_face[j - 1]
             Ce = RhU_face[j]
 
-            # Diffusion (pressure-driven flow)
-            A_lower[j - 1] = -Mw / dx**2
-            A_upper[j] = -Me / dx**2
-            A_diag[j] = (Mw + Me) / dx**2
-
-            # Advection source term
-            b[j] = (Ce - Cw) / dx
+            A_lower[j - 1] = -Mw
+            A_upper[j] = -Me
+            A_diag[j] = Mw + Me
+            b[j] = dx * (Ce - Cw)
 
         # Outlet BC
         A_diag[-1] = 1.0
@@ -307,7 +305,7 @@ def solve_reynolds_transient(
         A_lower[-1] = 0.0
         A_upper[-1] = 0.0
 
-        # Pseudo-transient term: (I/Δτ + A_ss) p^{n+1} = p^n/Δτ + b_ss
+        # Add pseudo-time term: (I/Δt + A_ss) p^{n+1} = p^n/Δt + b_ss
         for j in range(1, n - 1):
             A_diag[j] += inv_dt
             b[j] += inv_dt * p[j]
@@ -337,18 +335,18 @@ def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
     solid = params.solid
     c = params.controls
 
-    # Hertz line contact
+    # Hertz reference
     a = hertz_half_width(params.radius, params.load_per_unit_length, solid)
     p_hertz = hertz_max_pressure(params.radius, params.load_per_unit_length, solid)
 
-    # Geometry & elastic kernel
+    # Geometry + elastic kernel
     geom = line_geometry(x, params.radius)
     K_fft = make_fft_kernel(g, solid)
 
-    # Initial central film thickness
-    h_c = 5.0 * rough.rms
+    # Start closer to mixed regime (this is important!)
+    h_c = 1.5 * rough.rms
 
-    # Initial hydrodynamic pressure: Hertz dome in [-a,a]
+    # Initial Hertz dome in [-a, a]
     p = np.full(g.nodes, params.p_cav)
     active = np.abs(x) < a
     p[active] = p_hertz * np.sqrt(1.0 - (x[active] / a) ** 2)
@@ -358,27 +356,27 @@ def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
     total_prev = p + p_asp
 
     for _ in range(c.max_ehl_iterations):
-        # --- Film thickness from elastic deformation ---
+        # Film thickness from elastic deformation
         uz = elastic_deflection(total_prev, K_fft, dx)
         h = np.maximum(h_c + geom + uz, 0.005 * rough.rms)
 
-        # --- Transient Reynolds step for hydrodynamic pressure ---
+        # Transient Reynolds step
         p_new = solve_reynolds_transient(h, params, p_init=p)
 
-        # --- Asperity pressure from Greenwood–Tripp (no hard clipping) ---
+        # Asperity pressure from Greenwood–Tripp (no manual masking)
         p_asp_new = rough.asperity_pressure(h, solid.reduced_modulus)
 
-        # --- Total pressure and load ---
+        # Total pressure and load
         total_p = p_new + p_asp_new
         W_num = trapz(total_p, x)
 
-        # Relax towards new fields
+        # Relax pressures
         p = (1.0 - c.relaxation_p) * p + c.relaxation_p * p_new
         p = np.maximum(p, params.p_cav)
 
         p_asp = (1.0 - c.relaxation_p) * p_asp + c.relaxation_p * p_asp_new
 
-        # Load-controlled update of h_c
+        # Load-controlled update of central film thickness
         W_tar = params.load_per_unit_length
         rel_err = (W_num - W_tar) / W_tar if W_tar > 0 else 0.0
 
@@ -386,12 +384,12 @@ def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
             break
 
         factor = 1.0 + c.relaxation_hc * rel_err
-        factor = max(0.3, min(1.7, factor))
+        factor = max(0.2, min(1.8, factor))
         h_c = max(0.02 * rough.rms, h_c * factor)
 
         total_prev = p + p_asp
 
-    # Final fields
+    # Final evaluation
     uz = elastic_deflection(p + p_asp, K_fft, dx)
     h = np.maximum(h_c + geom + uz, 0.005 * rough.rms)
     p_asp = rough.asperity_pressure(h, solid.reduced_modulus)
@@ -411,11 +409,11 @@ def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
 
 
 # ============================================================
-# Default parameters & plotting (inline)
+# Default case & inline plotting
 # ============================================================
 
 def default_parameters() -> EHLParameters:
-    # User-specified case
+    # Same physical case, but solver now hits mixed-EHL
     W_per_L = 10e3
     rms = 0.2e-6
     eta = 1.25e9
@@ -426,23 +424,14 @@ def default_parameters() -> EHLParameters:
 
     solid = SolidMaterial(youngs_modulus=210e9, poisson_ratio=0.3)
     a = hertz_half_width(R, W_per_L, solid)
-    L = 8.0 * a           # numerical window [-4a, 4a]
+    L = 4.0 * a
     nodes = 801
 
     grid = SimulationGrid(length=L, nodes=nodes)
     lubricant = Lubricant(mu0=0.01381, alpha=15e-9, rho0=858.44)
     rough = Roughness(rms=rms, asperity_density=eta, asperity_radius=Ra)
     kin = Kinematics(entrainment_speed=Ue, relative_speed=Urel)
-    controls = SolverControls(
-        max_ehl_iterations=80,
-        max_reynolds_iterations=200,
-        reynolds_tol=1e-5,
-        load_tol=2e-2,
-        relaxation_p=0.6,
-        relaxation_hc=0.6,
-        transient_dt=1e-4,
-        max_time_steps=4000,
-    )
+    controls = SolverControls()
 
     return EHLParameters(
         lubricant=lubricant,
@@ -462,19 +451,13 @@ def run_default_case() -> Dict[str, np.ndarray]:
     params = default_parameters()
     res = simulate_ehl(params)
 
-    try:
-        import matplotlib.pyplot as plt
-    except ModuleNotFoundError:
-        print("matplotlib not available; skipping plots")
-        return res
-
     x = res["x"]
     p = res["pressure"]
     h = res["thickness"]
     p_asp = res["asperity_pressure"]
     a = res["hertz_half_width"]
 
-    # Plot over [-4.5a, 3a] scaled by a
+    # Plot over [-4.5a, 3a] scaled by a (inline, not saved)
     mask = (x >= -4.5 * a) & (x <= 3.0 * a)
     xs = x[mask] / a
 
@@ -497,8 +480,7 @@ def run_default_case() -> Dict[str, np.ndarray]:
     axes[2].legend()
 
     fig.tight_layout()
-    out = pathlib.Path("ehl_profiles_scaled.png")
-    fig.savefig(out, dpi=200)
+    plt.show()
 
     print(f"Target load W' = {params.load_per_unit_length:.3e} N/m")
     print(f"Numerical load  = {res['load_numerical']:.3e} N/m")
@@ -506,6 +488,7 @@ def run_default_case() -> Dict[str, np.ndarray]:
     print(f"Max pressure    = {np.max(p):.3e} Pa")
     print(f"Min film h_min  = {np.min(h):.3e} m")
     print(f"Central h_c     = {res['central_thickness']:.3e} m")
+    print(f"Max asperity pressure = {np.max(p_asp):.3e} Pa")
 
     return res
 
