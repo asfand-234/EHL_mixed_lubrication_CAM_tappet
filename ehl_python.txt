@@ -1,0 +1,297 @@
+from __future__ import annotations
+
+import math
+import pathlib
+from dataclasses import dataclass
+from typing import Dict, Tuple
+
+import numpy as np
+import scipy.fft as fft
+import scipy.sparse as sp
+from scipy.special import erf
+
+
+@dataclass
+class Lubricant:
+    """Thermo-rheological model for the lubricant."""
+
+    mu0: float  # Reference dynamic viscosity [Pa.s]
+    alpha: float  # Pressure-viscosity coefficient [1/Pa]
+    rho0: float  # Reference density [kg/m^3]
+    pressure_ref: float = 0.0  # Reference pressure for property models [Pa]
+    temperature: float = 363.15  # Temperature [K] (90 °C)
+    dh_coeffs: Tuple[float, float, float] = (0.59, 0.002, 0.0016)  # Dowson-Higginson coefficients
+
+    def viscosity(self, pressure: np.ndarray) -> np.ndarray:
+        """Return viscosity using the Roelands equation."""
+        z = self.alpha * (pressure - self.pressure_ref)
+        return self.mu0 * np.exp(z / (1.0 + z / 2.0))
+
+    def density(self, pressure: np.ndarray) -> np.ndarray:
+        """Return density using Dowson-Higginson correlation."""
+        a, b, c = self.dh_coeffs
+        return self.rho0 * (1.0 + a * pressure) / (1.0 + b * pressure + c * pressure**2)
+
+
+@dataclass
+class Roughness:
+    rms: float  # Combined RMS roughness [m]
+    asperity_density: float  # asperities per unit area
+    asperity_radius: float  # average asperity tip radius [m]
+    hardness_coef: float = 0.12  # Boundary shear strength coefficient
+
+    def asperity_load(self, separation: np.ndarray, eff_modulus: float) -> np.ndarray:
+        """Greenwood-Williamson asperity load per unit area."""
+        sigma = self.rms
+        eta = self.asperity_density
+        R = self.asperity_radius
+        H = np.clip(separation / sigma, -8.0, 8.0)
+        phi = np.exp(-H**2) + np.sqrt(np.pi) * H * (1.0 + erf(H))
+        prefactor = (4.0 / 3.0) * eta * eff_modulus * np.sqrt(R) * (sigma**1.5)
+        load = prefactor * np.maximum(phi, 0.0)
+        return load
+
+
+@dataclass
+class SolidMaterial:
+    youngs_modulus: float
+    poisson_ratio: float
+
+    @property
+    def reduced_modulus(self) -> float:
+        return self.youngs_modulus / (1.0 - self.poisson_ratio**2)
+
+
+@dataclass
+class SimulationGrid:
+    length: float
+    nodes: int
+
+    @property
+    def dx(self) -> float:
+        return self.length / (self.nodes - 1)
+
+    @property
+    def coordinates(self) -> np.ndarray:
+        return np.linspace(-self.length / 2.0, self.length / 2.0, self.nodes)
+
+
+@dataclass
+class Kinematics:
+    entrainment_speed: float
+    relative_speed: float
+
+
+@dataclass
+class TimeIntegration:
+    time_step: float
+    total_time: float
+    tolerance: float = 1e-4
+    max_iterations: int = 200
+    relaxation: float = 0.65
+
+    @property
+    def steps(self) -> int:
+        return int(math.ceil(self.total_time / self.time_step))
+
+
+@dataclass
+class EHLParameters:
+    lubricant: Lubricant
+    roughness: Roughness
+    solid: SolidMaterial
+    grid: SimulationGrid
+    motion: Kinematics
+    time: TimeIntegration
+    ambient_pressure: float = 0.0
+    vapor_pressure: float = 0.0
+    asperity_load_share: float = 0.0
+
+
+def line_contact_geometry(grid: SimulationGrid, radius: float) -> np.ndarray:
+    x = grid.coordinates
+    return x**2 / (2.0 * radius)
+
+
+def make_fft_kernel(grid: SimulationGrid, material: SolidMaterial) -> Tuple[np.ndarray, np.ndarray]:
+    dx = grid.dx
+    n = grid.nodes
+    k = 2.0 * math.pi * fft.rfftfreq(n, d=dx)
+    reduced = material.reduced_modulus
+    kernel = np.zeros_like(k)
+    kernel[1:] = 2.0 / (reduced * k[1:])
+    kernel[0] = 0.0
+    scale = 1.0 / n
+    return kernel, scale
+
+
+def elastic_deflection(pressure: np.ndarray, kernel_fft: Tuple[np.ndarray, float]) -> np.ndarray:
+    forward_kernel, scale = kernel_fft
+    spectrum = fft.rfft(pressure)
+    defl = fft.irfft(spectrum * forward_kernel, n=pressure.size)
+    return defl * scale
+
+
+def reynolds_operator(rho: np.ndarray, mu: np.ndarray, h: np.ndarray, theta: np.ndarray,
+                      grid: SimulationGrid, motion: Kinematics, dt: float,
+                      g_prev: np.ndarray) -> Tuple[sp.csr_matrix, np.ndarray]:
+    n = grid.nodes
+    dx = grid.dx
+    h3 = h**3
+    mobility = theta * rho * h3 / (12.0 * mu)
+    adv = 0.5 * motion.entrainment_speed * theta * rho * h
+    main = np.zeros(n)
+    lower = np.zeros(n - 1)
+    upper = np.zeros(n - 1)
+    rhs = np.zeros(n)
+    for i in range(1, n - 1):
+        mobility_w = 0.5 * (mobility[i] + mobility[i - 1])
+        mobility_e = 0.5 * (mobility[i] + mobility[i + 1])
+        adv_w = max(adv[i - 1], 0.0)
+        adv_e = max(-adv[i + 1], 0.0)
+        lower[i - 1] = -mobility_w / dx**2 - adv_w / dx
+        upper[i] = -mobility_e / dx**2 - adv_e / dx
+        main[i] = -lower[i - 1] - upper[i] + 1.0 / dt
+        rhs[i] = g_prev[i] / dt
+    main[0] = 1.0
+    main[-1] = 1.0
+    rhs[0] = 0.0
+    rhs[-1] = 0.0
+    A = sp.diags([lower, main, upper], offsets=[-1, 0, 1], shape=(n, n), format="csr")
+    return A, rhs
+
+
+def projected_gauss_seidel(A: sp.csr_matrix, rhs: np.ndarray, pressure: np.ndarray,
+                           vapor_pressure: float, relaxation: float,
+                           max_iter: int, tol: float) -> np.ndarray:
+    n = pressure.size
+    diag = A.diagonal()
+    for iteration in range(max_iter):
+        max_res = 0.0
+        for i in range(n):
+            row_start = A.indptr[i]
+            row_end = A.indptr[i + 1]
+            row_indices = A.indices[row_start:row_end]
+            row_data = A.data[row_start:row_end]
+            diag_mask = row_indices == i
+            sigma = np.dot(row_data, pressure[row_indices])
+            diag_term = row_data[diag_mask][0] if np.any(diag_mask) else diag[i]
+            new_p = (rhs[i] - sigma + diag_term * pressure[i]) / diag_term
+            new_p = pressure[i] + relaxation * (new_p - pressure[i])
+            new_p = max(new_p, vapor_pressure)
+            max_res = max(max_res, abs(new_p - pressure[i]))
+            pressure[i] = new_p
+        if max_res < tol:
+            break
+    return pressure
+
+
+def update_cavitation(pressure: np.ndarray, h: np.ndarray, rho: np.ndarray,
+                      vapor_pressure: float, mass_prev: np.ndarray) -> np.ndarray:
+    theta = np.ones_like(pressure)
+    cav = pressure <= vapor_pressure + 1e-6
+    theta[cav] = np.minimum(1.0, mass_prev[cav] / (rho[cav] * h[cav] + 1e-12))
+    return theta
+
+
+def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
+    grid = params.grid
+    lubricant = params.lubricant
+    roughness = params.roughness
+    material = params.solid
+    motion = params.motion
+    time = params.time
+
+    x = grid.coordinates
+    h0 = line_contact_geometry(grid, radius=0.01)
+    h = h0 + roughness.rms
+
+    pressure = np.full(grid.nodes, params.ambient_pressure)
+    rho = lubricant.density(pressure)
+    mu = lubricant.viscosity(pressure)
+    theta = np.ones_like(pressure)
+
+    kernel_fft = make_fft_kernel(grid, material)
+    deflection = np.zeros_like(pressure)
+
+    history_pressure = []
+    history_thickness = []
+    history_theta = []
+
+    mass_prev = rho * h * theta
+
+    for step in range(time.steps):
+        dt = time.time_step
+        for iteration in range(time.max_iterations):
+            A, rhs = reynolds_operator(rho, mu, h, theta, grid, motion, dt, mass_prev)
+            pressure = projected_gauss_seidel(A, rhs, pressure, params.vapor_pressure,
+                                              time.relaxation, time.max_iterations, time.tolerance)
+            pressure = np.maximum(pressure, params.vapor_pressure)
+            rho = lubricant.density(pressure)
+            mu = lubricant.viscosity(pressure)
+            deflection = elastic_deflection(pressure, kernel_fft)
+            h = h0 + deflection + roughness.rms
+            separation = np.maximum(h - roughness.rms, 1e-12)
+            asperity_p = roughness.asperity_load(separation, material.reduced_modulus)
+            total_p = pressure + asperity_p
+            theta = update_cavitation(pressure, h, rho, params.vapor_pressure, mass_prev)
+            resid = np.linalg.norm(total_p - pressure) / (np.linalg.norm(total_p) + 1e-12)
+            if resid < time.tolerance:
+                break
+        history_pressure.append(pressure.copy())
+        history_thickness.append(h.copy())
+        history_theta.append(theta.copy())
+        mass_prev = rho * h * theta
+    return {
+        "x": x,
+        "pressure": pressure,
+        "thickness": h,
+        "history_pressure": np.array(history_pressure),
+        "history_thickness": np.array(history_thickness),
+        "history_theta": np.array(history_theta),
+    }
+
+
+def default_parameters() -> EHLParameters:
+    grid = SimulationGrid(length=7.2e-3, nodes=256)
+    lubricant = Lubricant(mu0=0.01381, alpha=15e-9, rho0=858.44)
+    roughness = Roughness(rms=0.2e-6, asperity_density=1.25e9, asperity_radius=2e-4)
+    solid = SolidMaterial(youngs_modulus=210e9, poisson_ratio=0.3)
+    motion = Kinematics(entrainment_speed=1.0, relative_speed=0.0)
+    time = TimeIntegration(time_step=1e-4, total_time=1e-3)
+    return EHLParameters(
+        lubricant=lubricant,
+        roughness=roughness,
+        solid=solid,
+        grid=grid,
+        motion=motion,
+        time=time,
+        ambient_pressure=0.0,
+        vapor_pressure=0.0,
+    )
+
+
+def run_default_case() -> Dict[str, np.ndarray]:
+    params = default_parameters()
+    results = simulate_ehl(params)
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover - optional plotting dependency
+        print("matplotlib not available; skipping plots")
+        return results
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+    ax1.plot(results["x"], results["pressure"], label="Hydrodynamic pressure")
+    ax1.set_ylabel("Pressure [Pa]")
+    ax1.legend()
+    ax2.plot(results["x"], results["thickness"], label="Film thickness")
+    ax2.set_xlabel("x [m]")
+    ax2.set_ylabel("Film thickness [m]")
+    ax2.legend()
+    fig.tight_layout()
+    output_path = pathlib.Path("ehl_results.png")
+    fig.savefig(output_path, dpi=200)
+    return results
+
+
+if __name__ == "__main__":
+    run_default_case()
