@@ -7,14 +7,40 @@ from typing import Dict
 
 import numpy as np
 import scipy.fft as fft
-
-
 # ============================================================
 # Small utility
 # ============================================================
 
 def trapz(y: np.ndarray, x: np.ndarray) -> float:
+    # Compatible across NumPy versions
     return float(np.trapz(y, x))
+
+
+def solve_tridiagonal(
+    lower: np.ndarray,
+    diag: np.ndarray,
+    upper: np.ndarray,
+    rhs: np.ndarray,
+) -> np.ndarray:
+    """Thomas algorithm for tri-diagonal systems."""
+    n = diag.size
+    a = lower.copy()
+    b = diag.copy()
+    c = upper.copy()
+    d = rhs.copy()
+
+    for i in range(1, n):
+        w = a[i - 1] / b[i - 1]
+        b[i] -= w * c[i - 1]
+        d[i] -= w * d[i - 1]
+
+    x = np.zeros(n)
+    x[-1] = d[-1] / b[-1]
+
+    for i in range(n - 2, -1, -1):
+        x[i] = (d[i] - c[i] * x[i + 1]) / b[i]
+
+    return x
 
 
 # ============================================================
@@ -133,11 +159,13 @@ class Kinematics:
 @dataclass
 class SolverControls:
     max_ehl_iterations: int = 50
-    max_reynolds_iterations: int = 200
+    max_reynolds_iterations: int = 200   # (not used in transient; kept for compat)
     reynolds_tol: float = 1e-5
-    load_tol: float = 5e-2        # relative
+    load_tol: float = 5e-2               # relative
     relaxation_p: float = 0.6
     relaxation_hc: float = 0.4
+    transient_dt: float = 1e-4           # pseudo-time step for Reynolds
+    max_time_steps: int = 4000           # max pseudo-time steps per EHL iter
 
 
 @dataclass
@@ -197,118 +225,107 @@ def elastic_deflection(p: np.ndarray, K_fft: np.ndarray, dx: float) -> np.ndarra
 
 
 # ============================================================
-# Reynolds equation in active contact zone [-a, a]
+# Transient Reynolds equation (pseudo-time stepping)
 # ============================================================
 
-def solve_reynolds_active(
+def solve_reynolds_transient(
     h: np.ndarray,
     params: EHLParameters,
     p_init: np.ndarray,
-    a: float,
 ) -> np.ndarray:
     """
-    Solve steady compressible Reynolds equation only in the Hertz contact zone |x|<=a:
+    Pseudo-transient solution of compressible Reynolds:
+        ∂p/∂τ + R(p) = 0
 
-        d/dx( M dp/dx ) = d/dx( rho h Ue )
+    Backward Euler in pseudo-time:
+        (p^{n+1} - p^n)/Δτ + R(p^{n+1}) = 0
 
-    with M = rho h^3 / (12 mu),
-    p(-a) = p(+a) = p_cav,
-    and p = p_cav outside [-a,a].
-
-    Discretization:
-      Me (p_{i+1}-p_i) - Mw (p_i-p_{i-1}) = dx (Ce - Cw)
+    R(p) is the steady Reynolds residual with:
+      - p = max(p_ambient, p_cav) at both ends,
+      - cavitation floor p >= p_cav,
+      - no artificial symmetry/dome.
     """
     g = params.grid
     lub = params.lubricant
+    c = params.controls
+
+    n = g.nodes
+    dx = g.dx
     Ue = params.kin.entrainment_speed
     pc = params.p_cav
+    p_bc = max(params.p_ambient, pc)
 
-    x = g.x
-    dx = g.dx
-    n = g.nodes
+    dt = c.transient_dt
+    inv_dt = 1.0 / dt
 
-    # Indices of active contact region
-    active = np.abs(x) <= a + 1e-12
-    idx = np.where(active)[0]
-    iL = int(idx[0])
-    iR = int(idx[-1])
-    nA = iR - iL + 1
+    p = np.clip(p_init, pc, None)
 
-    # Local arrays
-    pA = p_init[iL:iR+1].copy()
-    hA = h[iL:iR+1]
+    for _ in range(c.max_time_steps):
+        rho = lub.density(p)
+        mu = lub.viscosity(p)
+        h_eff = np.maximum(h, 1e-12)
+        M = rho * h_eff**3 / (12.0 * mu)
 
-    for _ in range(params.controls.max_reynolds_iterations):
-        rhoA = lub.density(pA)
-        muA = lub.viscosity(pA)
-        h3A = np.maximum(hA, 1e-12)**3
-        M = rhoA * h3A / (12.0 * muA)
-
-        # Face mobilities and rho*h*Ue values
-        M_face = np.zeros(nA - 1)
-        RhU_face = np.zeros(nA - 1)
-        for j in range(nA - 1):
+        # Face-centered properties
+        M_face = np.zeros(n - 1)
+        RhU_face = np.zeros(n - 1)
+        for j in range(n - 1):
             Mw = max(M[j], 1e-20)
-            Me = max(M[j+1], 1e-20)
+            Me = max(M[j + 1], 1e-20)
             M_face[j] = 2.0 / (1.0 / Mw + 1.0 / Me)
-            RhU_face[j] = 0.5 * (rhoA[j] * hA[j] + rhoA[j+1] * hA[j+1]) * Ue
+            # Advective term: (ρ h Ue) at faces
+            RhU_face[j] = 0.5 * (rho[j] * h_eff[j] + rho[j + 1] * h_eff[j + 1]) * Ue
 
-        # Tri-diagonal system on active nodes
-        A_diag = np.zeros(nA)
-        A_lower = np.zeros(nA - 1)
-        A_upper = np.zeros(nA - 1)
-        b = np.zeros(nA)
+        # Build steady Reynolds operator A_ss p = b_ss
+        A_diag = np.zeros(n)
+        A_lower = np.zeros(n - 1)
+        A_upper = np.zeros(n - 1)
+        b = np.zeros(n)
 
-        # Dirichlet at boundaries x=-a and x=+a
+        # Inlet BC
         A_diag[0] = 1.0
-        b[0] = pc
-        A_diag[-1] = 1.0
-        b[-1] = pc
+        b[0] = p_bc
 
         # Interior nodes
-        for j in range(1, nA - 1):
-            Mw = M_face[j-1]
+        for j in range(1, n - 1):
+            Mw = M_face[j - 1]
             Me = M_face[j]
-            Cw = RhU_face[j-1]
+            Cw = RhU_face[j - 1]
             Ce = RhU_face[j]
 
-            A_lower[j-1] = -Mw
-            A_upper[j] = -Me
-            A_diag[j] = Mw + Me
-            b[j] = dx * (Ce - Cw)
+            # Diffusion (pressure-driven flow)
+            A_lower[j - 1] = -Mw / dx**2
+            A_upper[j] = -Me / dx**2
+            A_diag[j] = (Mw + Me) / dx**2
 
-        A_diag += 1e-20
+            # Advection source term
+            b[j] = (Ce - Cw) / dx
 
-        # Solve tri-diagonal via dense (for clarity; small nA)
-        A = np.zeros((nA, nA))
-        np.fill_diagonal(A, A_diag)
-        np.fill_diagonal(A[1:], A_lower)
-        np.fill_diagonal(A[:, 1:], A_upper)
+        # Outlet BC
+        A_diag[-1] = 1.0
+        b[-1] = p_bc
+        A_lower[-1] = 0.0
+        A_upper[-1] = 0.0
 
-        pA_new = np.linalg.solve(A, b)
-        pA_new = np.maximum(pA_new, pc)
+        # Pseudo-transient term: (I/Δτ + A_ss) p^{n+1} = p^n/Δτ + b_ss
+        for j in range(1, n - 1):
+            A_diag[j] += inv_dt
+            b[j] += inv_dt * p[j]
 
-        # Relaxation
-        pA_upd = (1.0 - params.controls.relaxation_p) * pA + \
-                 params.controls.relaxation_p * pA_new
+        p_new = solve_tridiagonal(A_lower, A_diag, A_upper, b)
+        p_new = np.maximum(p_new, pc)
 
-        pA_upd[0] = pc
-        pA_upd[-1] = pc
-
-        if np.linalg.norm(pA_upd - pA, np.inf) < params.controls.reynolds_tol:
-            pA = pA_upd
+        if np.linalg.norm(p_new - p, np.inf) < c.reynolds_tol:
+            p = p_new
             break
 
-        pA = pA_upd
+        p = p_new
 
-    # Embed into full domain: p = pc outside active
-    p = np.full(n, pc)
-    p[iL:iR+1] = pA
-    return p
+    return np.maximum(p, pc)
 
 
 # ============================================================
-# Mixed-EHL solver: Reynolds + elasticity + asperities + load
+# Mixed-EHL solver: transient Reynolds + elasticity + asperities
 # ============================================================
 
 def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
@@ -318,71 +335,66 @@ def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
 
     rough = params.roughness
     solid = params.solid
-    controls = params.controls
+    c = params.controls
 
     # Hertz line contact
     a = hertz_half_width(params.radius, params.load_per_unit_length, solid)
     p_hertz = hertz_max_pressure(params.radius, params.load_per_unit_length, solid)
 
-    # Geometry
+    # Geometry & elastic kernel
     geom = line_geometry(x, params.radius)
-
-    # Elastic kernel
     K_fft = make_fft_kernel(g, solid)
 
     # Initial central film thickness
     h_c = 5.0 * rough.rms
 
-    # Initial hydrodynamic pressure: Hertzian dome confined to [-a,a]
+    # Initial hydrodynamic pressure: Hertz dome in [-a,a]
     p = np.full(g.nodes, params.p_cav)
     active = np.abs(x) < a
     p[active] = p_hertz * np.sqrt(1.0 - (x[active] / a) ** 2)
+    p = np.maximum(p, params.p_cav)
 
-    for _ in range(controls.max_ehl_iterations):
-        # --- Elastic deformation and film thickness ---
-        uz = elastic_deflection(p, K_fft, dx)
-        h = np.maximum(h_c + geom + uz, 0.2 * rough.rms)
+    p_asp = np.zeros_like(p)
+    total_prev = p + p_asp
 
-        # --- Solve Reynolds only in contact zone [-a,a] ---
-        p_new = solve_reynolds_active(h, params, p_init=p, a=a)
+    for _ in range(c.max_ehl_iterations):
+        # --- Film thickness from elastic deformation ---
+        uz = elastic_deflection(total_prev, K_fft, dx)
+        h = np.maximum(h_c + geom + uz, 0.005 * rough.rms)
 
-        # --- Asperity pressure: only within contact zone and thin film ---
-        p_asp = rough.asperity_pressure(h, solid.reduced_modulus)
-        mask_contact = np.abs(x) <= a
-        mask_thin = h <= 3.0 * rough.rms
-        p_asp = np.where(mask_contact & mask_thin, p_asp, 0.0)
+        # --- Transient Reynolds step for hydrodynamic pressure ---
+        p_new = solve_reynolds_transient(h, params, p_init=p)
 
-        # --- Total pressure and current load ---
-        total_p = p_new + p_asp
+        # --- Asperity pressure from Greenwood–Tripp (no hard clipping) ---
+        p_asp_new = rough.asperity_pressure(h, solid.reduced_modulus)
+
+        # --- Total pressure and load ---
+        total_p = p_new + p_asp_new
         W_num = trapz(total_p, x)
 
-        # Relax hydrodynamic pressure
-        p = (1.0 - controls.relaxation_p) * p + \
-            controls.relaxation_p * p_new
+        # Relax towards new fields
+        p = (1.0 - c.relaxation_p) * p + c.relaxation_p * p_new
+        p = np.maximum(p, params.p_cav)
 
-        # --- Load-controlled update of h_c ---
+        p_asp = (1.0 - c.relaxation_p) * p_asp + c.relaxation_p * p_asp_new
+
+        # Load-controlled update of h_c
         W_tar = params.load_per_unit_length
-        if W_tar > 0.0:
-            rel_err = (W_num - W_tar) / W_tar
-        else:
-            rel_err = 0.0
+        rel_err = (W_num - W_tar) / W_tar if W_tar > 0 else 0.0
 
-        if abs(rel_err) < controls.load_tol:
+        if abs(rel_err) < c.load_tol:
             break
 
-        # Correct sign: if load too small (rel_err<0) → decrease h_c
-        k = controls.relaxation_hc
-        factor = 1.0 + k * rel_err
+        factor = 1.0 + c.relaxation_hc * rel_err
         factor = max(0.3, min(1.7, factor))
-        h_c = max(rough.rms, h_c * factor)
+        h_c = max(0.02 * rough.rms, h_c * factor)
 
-    # Final fields with converged h_c and p
-    uz = elastic_deflection(p, K_fft, dx)
-    h = np.maximum(h_c + geom + uz, 0.2 * rough.rms)
+        total_prev = p + p_asp
+
+    # Final fields
+    uz = elastic_deflection(p + p_asp, K_fft, dx)
+    h = np.maximum(h_c + geom + uz, 0.005 * rough.rms)
     p_asp = rough.asperity_pressure(h, solid.reduced_modulus)
-    mask_contact = np.abs(x) <= a
-    mask_thin = h <= 3.0 * rough.rms
-    p_asp = np.where(mask_contact & mask_thin, p_asp, 0.0)
     total_p = p + p_asp
     W_num = trapz(total_p, x)
 
@@ -399,7 +411,7 @@ def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
 
 
 # ============================================================
-# Default parameters & plotting
+# Default parameters & plotting (inline)
 # ============================================================
 
 def default_parameters() -> EHLParameters:
@@ -410,7 +422,7 @@ def default_parameters() -> EHLParameters:
     Ra = 2.0e-4
     Ue = 1.2
     Urel = 0.8
-    R = 0.01
+    R = 0.007
 
     solid = SolidMaterial(youngs_modulus=210e9, poisson_ratio=0.3)
     a = hertz_half_width(R, W_per_L, solid)
@@ -422,12 +434,14 @@ def default_parameters() -> EHLParameters:
     rough = Roughness(rms=rms, asperity_density=eta, asperity_radius=Ra)
     kin = Kinematics(entrainment_speed=Ue, relative_speed=Urel)
     controls = SolverControls(
-        max_ehl_iterations=50,
+        max_ehl_iterations=80,
         max_reynolds_iterations=200,
         reynolds_tol=1e-5,
-        load_tol=5e-2,
+        load_tol=2e-2,
         relaxation_p=0.6,
-        relaxation_hc=0.4,
+        relaxation_hc=0.6,
+        transient_dt=1e-4,
+        max_time_steps=4000,
     )
 
     return EHLParameters(
