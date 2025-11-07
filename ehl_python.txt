@@ -3,54 +3,102 @@ from __future__ import annotations
 import math
 import pathlib
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict
 
 import numpy as np
 import scipy.fft as fft
-import scipy.sparse as sp
-from scipy.special import erf
 
+
+# ============================================================
+# Small utility
+# ============================================================
+
+def trapz(y: np.ndarray, x: np.ndarray) -> float:
+    return float(np.trapz(y, x))
+
+
+# ============================================================
+# Lubricant model: Roelands + Dowson–Higginson
+# ============================================================
 
 @dataclass
 class Lubricant:
-    """Thermo-rheological model for the lubricant."""
+    mu0: float        # reference viscosity [Pa·s]
+    alpha: float      # pressure-viscosity coefficient [1/Pa]
+    rho0: float       # reference density [kg/m^3]
+    p_ref: float = 0.0
 
-    mu0: float  # Reference dynamic viscosity [Pa.s]
-    alpha: float  # Pressure-viscosity coefficient [1/Pa]
-    rho0: float  # Reference density [kg/m^3]
-    pressure_ref: float = 0.0  # Reference pressure for property models [Pa]
-    temperature: float = 363.15  # Temperature [K] (90 °C)
-    dh_coeffs: Tuple[float, float, float] = (0.59, 0.002, 0.0016)  # Dowson-Higginson coefficients
+    mu_min_ratio: float = 1e-5
+    mu_max_ratio: float = 1e3
 
-    def viscosity(self, pressure: np.ndarray) -> np.ndarray:
-        """Return viscosity using the Roelands equation."""
-        z = self.alpha * (pressure - self.pressure_ref)
-        return self.mu0 * np.exp(z / (1.0 + z / 2.0))
+    # Typical Dowson–Higginson
+    dh_a: float = 0.59e-9
+    dh_b: float = 1.34e-9
 
-    def density(self, pressure: np.ndarray) -> np.ndarray:
-        """Return density using Dowson-Higginson correlation."""
-        a, b, c = self.dh_coeffs
-        return self.rho0 * (1.0 + a * pressure) / (1.0 + b * pressure + c * pressure**2)
+    def viscosity(self, p: np.ndarray) -> np.ndarray:
+        p_eff = np.asarray(p, float) - self.p_ref
+        z = self.alpha * p_eff
+        mu = self.mu0 * np.exp(z / (1.0 + 0.5 * z))
+        return np.clip(
+            mu,
+            self.mu0 * self.mu_min_ratio,
+            self.mu0 * self.mu_max_ratio,
+        )
 
+    def density(self, p: np.ndarray) -> np.ndarray:
+        p_eff = np.asarray(p, float) - self.p_ref
+        return self.rho0 * (1.0 + self.dh_a * p_eff) / (1.0 + self.dh_b * p_eff)
+
+
+# ============================================================
+# Roughness: Greenwood–Tripp asperity model (Arcoumanis F5/2)
+# ============================================================
 
 @dataclass
 class Roughness:
-    rms: float  # Combined RMS roughness [m]
-    asperity_density: float  # asperities per unit area
-    asperity_radius: float  # average asperity tip radius [m]
-    hardness_coef: float = 0.12  # Boundary shear strength coefficient
+    rms: float
+    asperity_density: float
+    asperity_radius: float
 
-    def asperity_load(self, separation: np.ndarray, eff_modulus: float) -> np.ndarray:
-        """Greenwood-Williamson asperity load per unit area."""
-        sigma = self.rms
-        eta = self.asperity_density
-        R = self.asperity_radius
-        H = np.clip(separation / sigma, -8.0, 8.0)
-        phi = np.exp(-H**2) + np.sqrt(np.pi) * H * (1.0 + erf(H))
-        prefactor = (4.0 / 3.0) * eta * eff_modulus * np.sqrt(R) * (sigma**1.5)
-        load = prefactor * np.maximum(phi, 0.0)
-        return load
+    def F52(self, lam: np.ndarray) -> np.ndarray:
+        """Arcoumanis polynomial fit of Greenwood–Tripp F_{5/2}(λ)."""
+        lam = np.asarray(lam, float)
+        lam_c = 2.224
+        lc = np.clip(lam, 0.0, lam_c)
 
+        F = (
+            0.0046 * lc**5
+            + 0.0574 * lc**4
+            - 0.2958 * lc**3
+            + 0.7844 * lc**2
+            - 1.0776 * lc
+            + 0.6167
+        )
+        F = np.where(lc >= lam_c, 0.0, F)
+        return np.clip(F, 0.0, None)
+
+    def asperity_pressure(self, h: np.ndarray, E_red: float) -> np.ndarray:
+        """Greenwood–Tripp asperity pressure [Pa]."""
+        pa = np.zeros_like(h)
+        if self.rms <= 0 or self.asperity_density <= 0 or self.asperity_radius <= 0:
+            return pa
+
+        lam = np.maximum(h / self.rms, 0.0)
+        F = self.F52(lam)
+
+        pref = (
+            (16.0 * math.sqrt(2.0) / 15.0)
+            * E_red
+            * (self.asperity_density * self.asperity_radius * self.rms) ** 2
+            * math.sqrt(self.rms / self.asperity_radius)
+        )
+        pa[:] = pref * F
+        return pa
+
+
+# ============================================================
+# Solid, grid, kinematics, controls
+# ============================================================
 
 @dataclass
 class SolidMaterial:
@@ -59,7 +107,7 @@ class SolidMaterial:
 
     @property
     def reduced_modulus(self) -> float:
-        return self.youngs_modulus / (1.0 - self.poisson_ratio**2)
+        return self.youngs_modulus / (1.0 - self.poisson_ratio ** 2)
 
 
 @dataclass
@@ -72,27 +120,24 @@ class SimulationGrid:
         return self.length / (self.nodes - 1)
 
     @property
-    def coordinates(self) -> np.ndarray:
-        return np.linspace(-self.length / 2.0, self.length / 2.0, self.nodes)
+    def x(self) -> np.ndarray:
+        return np.linspace(-0.5 * self.length, 0.5 * self.length, self.nodes)
 
 
 @dataclass
 class Kinematics:
-    entrainment_speed: float
-    relative_speed: float
+    entrainment_speed: float   # Ue
+    relative_speed: float      # Urel (kept for completeness)
 
 
 @dataclass
-class TimeIntegration:
-    time_step: float
-    total_time: float
-    tolerance: float = 1e-4
-    max_iterations: int = 200
-    relaxation: float = 0.65
-
-    @property
-    def steps(self) -> int:
-        return int(math.ceil(self.total_time / self.time_step))
+class SolverControls:
+    max_ehl_iterations: int = 50
+    max_reynolds_iterations: int = 200
+    reynolds_tol: float = 1e-5
+    load_tol: float = 5e-2        # relative
+    relaxation_p: float = 0.6
+    relaxation_hc: float = 0.4
 
 
 @dataclass
@@ -101,196 +146,354 @@ class EHLParameters:
     roughness: Roughness
     solid: SolidMaterial
     grid: SimulationGrid
-    motion: Kinematics
-    time: TimeIntegration
-    ambient_pressure: float = 0.0
-    vapor_pressure: float = 0.0
-    asperity_load_share: float = 0.0
+    kin: Kinematics
+    radius: float
+    load_per_unit_length: float
+    controls: SolverControls
+    p_ambient: float = 0.0
+    p_cav: float = 0.0
 
 
-def line_contact_geometry(grid: SimulationGrid, radius: float) -> np.ndarray:
-    x = grid.coordinates
-    return x**2 / (2.0 * radius)
+# ============================================================
+# Hertz line contact geometry
+# ============================================================
+
+def hertz_half_width(R: float, W: float, mat: SolidMaterial) -> float:
+    Ered = mat.reduced_modulus
+    return math.sqrt(4.0 * W * R / (math.pi * Ered))
 
 
-def make_fft_kernel(grid: SimulationGrid, material: SolidMaterial) -> Tuple[np.ndarray, np.ndarray]:
+def hertz_max_pressure(R: float, W: float, mat: SolidMaterial) -> float:
+    a = hertz_half_width(R, W, mat)
+    return 2.0 * W / (math.pi * a)
+
+
+def line_geometry(x: np.ndarray, R: float) -> np.ndarray:
+    return x**2 / (2.0 * R)
+
+
+# ============================================================
+# Elastic deformation via FFT (1D line contact)
+# ============================================================
+
+def make_fft_kernel(grid: SimulationGrid, mat: SolidMaterial) -> np.ndarray:
+    """
+    Influence kernel (Fourier domain) for elastic half-space under line load:
+        u_hat(k) = -2 / (E' |k|) * p_hat(k)
+    """
     dx = grid.dx
     n = grid.nodes
     k = 2.0 * math.pi * fft.rfftfreq(n, d=dx)
-    reduced = material.reduced_modulus
-    kernel = np.zeros_like(k)
-    kernel[1:] = 2.0 / (reduced * k[1:])
-    kernel[0] = 0.0
-    scale = 1.0 / n
-    return kernel, scale
+    K = np.zeros_like(k)
+    K[1:] = -2.0 / (mat.reduced_modulus * np.abs(k[1:]))
+    K[0] = 0.0
+    return K
 
 
-def elastic_deflection(pressure: np.ndarray, kernel_fft: Tuple[np.ndarray, float]) -> np.ndarray:
-    forward_kernel, scale = kernel_fft
-    spectrum = fft.rfft(pressure)
-    defl = fft.irfft(spectrum * forward_kernel, n=pressure.size)
-    return defl * scale
+def elastic_deflection(p: np.ndarray, K_fft: np.ndarray, dx: float) -> np.ndarray:
+    Pk = fft.rfft(p)
+    uz = fft.irfft(Pk * K_fft, n=p.size)
+    return uz * dx
 
 
-def reynolds_operator(rho: np.ndarray, mu: np.ndarray, h: np.ndarray, theta: np.ndarray,
-                      grid: SimulationGrid, motion: Kinematics, dt: float,
-                      g_prev: np.ndarray) -> Tuple[sp.csr_matrix, np.ndarray]:
-    n = grid.nodes
-    dx = grid.dx
-    h3 = h**3
-    mobility = theta * rho * h3 / (12.0 * mu)
-    adv = 0.5 * motion.entrainment_speed * theta * rho * h
-    main = np.zeros(n)
-    lower = np.zeros(n - 1)
-    upper = np.zeros(n - 1)
-    rhs = np.zeros(n)
-    for i in range(1, n - 1):
-        mobility_w = 0.5 * (mobility[i] + mobility[i - 1])
-        mobility_e = 0.5 * (mobility[i] + mobility[i + 1])
-        adv_w = max(adv[i - 1], 0.0)
-        adv_e = max(-adv[i + 1], 0.0)
-        lower[i - 1] = -mobility_w / dx**2 - adv_w / dx
-        upper[i] = -mobility_e / dx**2 - adv_e / dx
-        main[i] = -lower[i - 1] - upper[i] + 1.0 / dt
-        rhs[i] = g_prev[i] / dt
-    main[0] = 1.0
-    main[-1] = 1.0
-    rhs[0] = 0.0
-    rhs[-1] = 0.0
-    A = sp.diags([lower, main, upper], offsets=[-1, 0, 1], shape=(n, n), format="csr")
-    return A, rhs
+# ============================================================
+# Reynolds equation in active contact zone [-a, a]
+# ============================================================
 
+def solve_reynolds_active(
+    h: np.ndarray,
+    params: EHLParameters,
+    p_init: np.ndarray,
+    a: float,
+) -> np.ndarray:
+    """
+    Solve steady compressible Reynolds equation only in the Hertz contact zone |x|<=a:
 
-def projected_gauss_seidel(A: sp.csr_matrix, rhs: np.ndarray, pressure: np.ndarray,
-                           vapor_pressure: float, relaxation: float,
-                           max_iter: int, tol: float) -> np.ndarray:
-    n = pressure.size
-    diag = A.diagonal()
-    for iteration in range(max_iter):
-        max_res = 0.0
-        for i in range(n):
-            row_start = A.indptr[i]
-            row_end = A.indptr[i + 1]
-            row_indices = A.indices[row_start:row_end]
-            row_data = A.data[row_start:row_end]
-            diag_mask = row_indices == i
-            sigma = np.dot(row_data, pressure[row_indices])
-            diag_term = row_data[diag_mask][0] if np.any(diag_mask) else diag[i]
-            new_p = (rhs[i] - sigma + diag_term * pressure[i]) / diag_term
-            new_p = pressure[i] + relaxation * (new_p - pressure[i])
-            new_p = max(new_p, vapor_pressure)
-            max_res = max(max_res, abs(new_p - pressure[i]))
-            pressure[i] = new_p
-        if max_res < tol:
+        d/dx( M dp/dx ) = d/dx( rho h Ue )
+
+    with M = rho h^3 / (12 mu),
+    p(-a) = p(+a) = p_cav,
+    and p = p_cav outside [-a,a].
+
+    Discretization:
+      Me (p_{i+1}-p_i) - Mw (p_i-p_{i-1}) = dx (Ce - Cw)
+    """
+    g = params.grid
+    lub = params.lubricant
+    Ue = params.kin.entrainment_speed
+    pc = params.p_cav
+
+    x = g.x
+    dx = g.dx
+    n = g.nodes
+
+    # Indices of active contact region
+    active = np.abs(x) <= a + 1e-12
+    idx = np.where(active)[0]
+    iL = int(idx[0])
+    iR = int(idx[-1])
+    nA = iR - iL + 1
+
+    # Local arrays
+    pA = p_init[iL:iR+1].copy()
+    hA = h[iL:iR+1]
+
+    for _ in range(params.controls.max_reynolds_iterations):
+        rhoA = lub.density(pA)
+        muA = lub.viscosity(pA)
+        h3A = np.maximum(hA, 1e-12)**3
+        M = rhoA * h3A / (12.0 * muA)
+
+        # Face mobilities and rho*h*Ue values
+        M_face = np.zeros(nA - 1)
+        RhU_face = np.zeros(nA - 1)
+        for j in range(nA - 1):
+            Mw = max(M[j], 1e-20)
+            Me = max(M[j+1], 1e-20)
+            M_face[j] = 2.0 / (1.0 / Mw + 1.0 / Me)
+            RhU_face[j] = 0.5 * (rhoA[j] * hA[j] + rhoA[j+1] * hA[j+1]) * Ue
+
+        # Tri-diagonal system on active nodes
+        A_diag = np.zeros(nA)
+        A_lower = np.zeros(nA - 1)
+        A_upper = np.zeros(nA - 1)
+        b = np.zeros(nA)
+
+        # Dirichlet at boundaries x=-a and x=+a
+        A_diag[0] = 1.0
+        b[0] = pc
+        A_diag[-1] = 1.0
+        b[-1] = pc
+
+        # Interior nodes
+        for j in range(1, nA - 1):
+            Mw = M_face[j-1]
+            Me = M_face[j]
+            Cw = RhU_face[j-1]
+            Ce = RhU_face[j]
+
+            A_lower[j-1] = -Mw
+            A_upper[j] = -Me
+            A_diag[j] = Mw + Me
+            b[j] = dx * (Ce - Cw)
+
+        A_diag += 1e-20
+
+        # Solve tri-diagonal via dense (for clarity; small nA)
+        A = np.zeros((nA, nA))
+        np.fill_diagonal(A, A_diag)
+        np.fill_diagonal(A[1:], A_lower)
+        np.fill_diagonal(A[:, 1:], A_upper)
+
+        pA_new = np.linalg.solve(A, b)
+        pA_new = np.maximum(pA_new, pc)
+
+        # Relaxation
+        pA_upd = (1.0 - params.controls.relaxation_p) * pA + \
+                 params.controls.relaxation_p * pA_new
+
+        pA_upd[0] = pc
+        pA_upd[-1] = pc
+
+        if np.linalg.norm(pA_upd - pA, np.inf) < params.controls.reynolds_tol:
+            pA = pA_upd
             break
-    return pressure
+
+        pA = pA_upd
+
+    # Embed into full domain: p = pc outside active
+    p = np.full(n, pc)
+    p[iL:iR+1] = pA
+    return p
 
 
-def update_cavitation(pressure: np.ndarray, h: np.ndarray, rho: np.ndarray,
-                      vapor_pressure: float, mass_prev: np.ndarray) -> np.ndarray:
-    theta = np.ones_like(pressure)
-    cav = pressure <= vapor_pressure + 1e-6
-    theta[cav] = np.minimum(1.0, mass_prev[cav] / (rho[cav] * h[cav] + 1e-12))
-    return theta
-
+# ============================================================
+# Mixed-EHL solver: Reynolds + elasticity + asperities + load
+# ============================================================
 
 def simulate_ehl(params: EHLParameters) -> Dict[str, np.ndarray]:
-    grid = params.grid
-    lubricant = params.lubricant
-    roughness = params.roughness
-    material = params.solid
-    motion = params.motion
-    time = params.time
+    g = params.grid
+    x = g.x
+    dx = g.dx
 
-    x = grid.coordinates
-    h0 = line_contact_geometry(grid, radius=0.01)
-    h = h0 + roughness.rms
+    rough = params.roughness
+    solid = params.solid
+    controls = params.controls
 
-    pressure = np.full(grid.nodes, params.ambient_pressure)
-    rho = lubricant.density(pressure)
-    mu = lubricant.viscosity(pressure)
-    theta = np.ones_like(pressure)
+    # Hertz line contact
+    a = hertz_half_width(params.radius, params.load_per_unit_length, solid)
+    p_hertz = hertz_max_pressure(params.radius, params.load_per_unit_length, solid)
 
-    kernel_fft = make_fft_kernel(grid, material)
-    deflection = np.zeros_like(pressure)
+    # Geometry
+    geom = line_geometry(x, params.radius)
 
-    history_pressure = []
-    history_thickness = []
-    history_theta = []
+    # Elastic kernel
+    K_fft = make_fft_kernel(g, solid)
 
-    mass_prev = rho * h * theta
+    # Initial central film thickness
+    h_c = 5.0 * rough.rms
 
-    for step in range(time.steps):
-        dt = time.time_step
-        for iteration in range(time.max_iterations):
-            A, rhs = reynolds_operator(rho, mu, h, theta, grid, motion, dt, mass_prev)
-            pressure = projected_gauss_seidel(A, rhs, pressure, params.vapor_pressure,
-                                              time.relaxation, time.max_iterations, time.tolerance)
-            pressure = np.maximum(pressure, params.vapor_pressure)
-            rho = lubricant.density(pressure)
-            mu = lubricant.viscosity(pressure)
-            deflection = elastic_deflection(pressure, kernel_fft)
-            h = h0 + deflection + roughness.rms
-            separation = np.maximum(h - roughness.rms, 1e-12)
-            asperity_p = roughness.asperity_load(separation, material.reduced_modulus)
-            total_p = pressure + asperity_p
-            theta = update_cavitation(pressure, h, rho, params.vapor_pressure, mass_prev)
-            resid = np.linalg.norm(total_p - pressure) / (np.linalg.norm(total_p) + 1e-12)
-            if resid < time.tolerance:
-                break
-        history_pressure.append(pressure.copy())
-        history_thickness.append(h.copy())
-        history_theta.append(theta.copy())
-        mass_prev = rho * h * theta
+    # Initial hydrodynamic pressure: Hertzian dome confined to [-a,a]
+    p = np.full(g.nodes, params.p_cav)
+    active = np.abs(x) < a
+    p[active] = p_hertz * np.sqrt(1.0 - (x[active] / a) ** 2)
+
+    for _ in range(controls.max_ehl_iterations):
+        # --- Elastic deformation and film thickness ---
+        uz = elastic_deflection(p, K_fft, dx)
+        h = np.maximum(h_c + geom + uz, 0.2 * rough.rms)
+
+        # --- Solve Reynolds only in contact zone [-a,a] ---
+        p_new = solve_reynolds_active(h, params, p_init=p, a=a)
+
+        # --- Asperity pressure: only within contact zone and thin film ---
+        p_asp = rough.asperity_pressure(h, solid.reduced_modulus)
+        mask_contact = np.abs(x) <= a
+        mask_thin = h <= 3.0 * rough.rms
+        p_asp = np.where(mask_contact & mask_thin, p_asp, 0.0)
+
+        # --- Total pressure and current load ---
+        total_p = p_new + p_asp
+        W_num = trapz(total_p, x)
+
+        # Relax hydrodynamic pressure
+        p = (1.0 - controls.relaxation_p) * p + \
+            controls.relaxation_p * p_new
+
+        # --- Load-controlled update of h_c ---
+        W_tar = params.load_per_unit_length
+        if W_tar > 0.0:
+            rel_err = (W_num - W_tar) / W_tar
+        else:
+            rel_err = 0.0
+
+        if abs(rel_err) < controls.load_tol:
+            break
+
+        # Correct sign: if load too small (rel_err<0) → decrease h_c
+        k = controls.relaxation_hc
+        factor = 1.0 + k * rel_err
+        factor = max(0.3, min(1.7, factor))
+        h_c = max(rough.rms, h_c * factor)
+
+    # Final fields with converged h_c and p
+    uz = elastic_deflection(p, K_fft, dx)
+    h = np.maximum(h_c + geom + uz, 0.2 * rough.rms)
+    p_asp = rough.asperity_pressure(h, solid.reduced_modulus)
+    mask_contact = np.abs(x) <= a
+    mask_thin = h <= 3.0 * rough.rms
+    p_asp = np.where(mask_contact & mask_thin, p_asp, 0.0)
+    total_p = p + p_asp
+    W_num = trapz(total_p, x)
+
     return {
         "x": x,
-        "pressure": pressure,
+        "pressure": p,
         "thickness": h,
-        "history_pressure": np.array(history_pressure),
-        "history_thickness": np.array(history_thickness),
-        "history_theta": np.array(history_theta),
+        "asperity_pressure": p_asp,
+        "hertz_half_width": a,
+        "hertz_pressure": p_hertz,
+        "central_thickness": h_c,
+        "load_numerical": W_num,
     }
 
 
+# ============================================================
+# Default parameters & plotting
+# ============================================================
+
 def default_parameters() -> EHLParameters:
-    grid = SimulationGrid(length=7.2e-3, nodes=256)
-    lubricant = Lubricant(mu0=0.01381, alpha=15e-9, rho0=858.44)
-    roughness = Roughness(rms=0.2e-6, asperity_density=1.25e9, asperity_radius=2e-4)
+    # User-specified case
+    W_per_L = 10e3
+    rms = 0.2e-6
+    eta = 1.25e9
+    Ra = 2.0e-4
+    Ue = 1.2
+    Urel = 0.8
+    R = 0.01
+
     solid = SolidMaterial(youngs_modulus=210e9, poisson_ratio=0.3)
-    motion = Kinematics(entrainment_speed=1.0, relative_speed=0.0)
-    time = TimeIntegration(time_step=1e-4, total_time=1e-3)
+    a = hertz_half_width(R, W_per_L, solid)
+    L = 8.0 * a           # numerical window [-4a, 4a]
+    nodes = 801
+
+    grid = SimulationGrid(length=L, nodes=nodes)
+    lubricant = Lubricant(mu0=0.01381, alpha=15e-9, rho0=858.44)
+    rough = Roughness(rms=rms, asperity_density=eta, asperity_radius=Ra)
+    kin = Kinematics(entrainment_speed=Ue, relative_speed=Urel)
+    controls = SolverControls(
+        max_ehl_iterations=50,
+        max_reynolds_iterations=200,
+        reynolds_tol=1e-5,
+        load_tol=5e-2,
+        relaxation_p=0.6,
+        relaxation_hc=0.4,
+    )
+
     return EHLParameters(
         lubricant=lubricant,
-        roughness=roughness,
+        roughness=rough,
         solid=solid,
         grid=grid,
-        motion=motion,
-        time=time,
-        ambient_pressure=0.0,
-        vapor_pressure=0.0,
+        kin=kin,
+        radius=R,
+        load_per_unit_length=W_per_L,
+        controls=controls,
+        p_ambient=0.0,
+        p_cav=0.0,
     )
 
 
 def run_default_case() -> Dict[str, np.ndarray]:
     params = default_parameters()
-    results = simulate_ehl(params)
+    res = simulate_ehl(params)
+
     try:
-        import matplotlib.pyplot as plt  # type: ignore
-    except ModuleNotFoundError:  # pragma: no cover - optional plotting dependency
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError:
         print("matplotlib not available; skipping plots")
-        return results
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
-    ax1.plot(results["x"], results["pressure"], label="Hydrodynamic pressure")
-    ax1.set_ylabel("Pressure [Pa]")
-    ax1.legend()
-    ax2.plot(results["x"], results["thickness"], label="Film thickness")
-    ax2.set_xlabel("x [m]")
-    ax2.set_ylabel("Film thickness [m]")
-    ax2.legend()
+        return res
+
+    x = res["x"]
+    p = res["pressure"]
+    h = res["thickness"]
+    p_asp = res["asperity_pressure"]
+    a = res["hertz_half_width"]
+
+    # Plot over [-4.5a, 3a] scaled by a
+    mask = (x >= -4.5 * a) & (x <= 3.0 * a)
+    xs = x[mask] / a
+
+    fig, axes = plt.subplots(3, 1, figsize=(8, 9), sharex=True)
+
+    axes[0].plot(xs, p[mask], label="Hydrodynamic pressure")
+    axes[0].axvline(-1.0, linestyle="--", linewidth=0.7)
+    axes[0].axvline(1.0, linestyle="--", linewidth=0.7)
+    axes[0].set_ylabel("Pressure [Pa]")
+    axes[0].legend()
+    axes[0].set_title("Mixed EHL line contact (scaled by Hertz a)")
+
+    axes[1].plot(xs, h[mask], label="Film thickness")
+    axes[1].set_ylabel("Film thickness [m]")
+    axes[1].legend()
+
+    axes[2].plot(xs, p_asp[mask], label="Asperity pressure")
+    axes[2].set_xlabel("x / a")
+    axes[2].set_ylabel("Asperity pressure [Pa]")
+    axes[2].legend()
+
     fig.tight_layout()
-    output_path = pathlib.Path("ehl_results.png")
-    fig.savefig(output_path, dpi=200)
-    return results
+    out = pathlib.Path("ehl_profiles_scaled.png")
+    fig.savefig(out, dpi=200)
+
+    print(f"Target load W' = {params.load_per_unit_length:.3e} N/m")
+    print(f"Numerical load  = {res['load_numerical']:.3e} N/m")
+    print(f"Load ratio      = {res['load_numerical'] / params.load_per_unit_length:.3f}")
+    print(f"Max pressure    = {np.max(p):.3e} Pa")
+    print(f"Min film h_min  = {np.min(h):.3e} m")
+    print(f"Central h_c     = {res['central_thickness']:.3e} m")
+
+    return res
 
 
 if __name__ == "__main__":
