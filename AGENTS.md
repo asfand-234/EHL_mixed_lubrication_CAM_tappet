@@ -3,9 +3,6 @@ EHL_00_run_Study_A2_gen, EHL_00_run_Study_A3_gen, EHL_00_run_Study_A_gen, EHL_01
 
 It is a MATLAB solver for unsteady Elasto-Hydrodynamic Lubrication (EHL) problems, based on the EHL-FBNS algorithm. The solver uses the Finite Volume (FV) discretization of the Reynolds equation incorporating mass-conserving cavitation through the cavity fraction and elastic deformation through the application of the Boundary Element Method (BEM) to an elastic half-space. Shear thinning, Roelands and Dowson-Higginson relations are also embedded in the code. Furthermore, the load-balance equation is considered.
 
-The code consists out of three main scripts which are suppose to be executed consecutively and two optional scripts:
-(Somewhat optional): the scripts denoted with EHL_00_run will set up and run severeal EHL solver simulations within one study. The scripts denoted with EHL_01_setup will set up the input information for the EHL solver. (However, if you don't want to use the EHL_00_run scripts, you need to modify the EHL_01_setup script such that all of the variables read from the autorun structure (which is originally initiated in EHL_00_run) are instead defined in EHL_01_setup). The script denoted with EHL_02_mainprocess incorporates the actual EHL solver and computes the solution of the EHL problem.
-
 
 TASKS:
 
