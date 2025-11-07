@@ -134,13 +134,13 @@ import slippy.contact as C
 def solve_line_contact(line_load, plot=False, verbose=True):
     slippy.CUDA = False
     slippy.material_names.clear()
-    radius = 0.01905
-    rolling_speed = 4.0
+    radius = 0.007
+    rolling_speed = 2.0
     line_length = 1.0  # assumed axial length for per-unit load calculations
-    youngs_modulus = 200e9
+    youngs_modulus = 217e9
     p_ratio = 0.3
     grid_size = 65
-    eta_0 = 0.096
+    eta_0 = 0.01381
     roelands_p_0 = 1 / 5.1e-9
     roelands_z = 0.68
     hertz_result = C.hertz_full([radius, float('inf')], [float('inf'), float('inf')],
@@ -192,18 +192,23 @@ def solve_line_contact(line_load, plot=False, verbose=True):
         X_nd = X[:, X.shape[1] // 2] / hertz_a
         nd_pressure = state['nd_pressure'][:, state['nd_pressure'].shape[1] // 2]
         nd_gap = state['gap'][:, state['gap'].shape[1] // 2] / hertz_a
-        fig, ax = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-        ax[0].plot(X_nd, nd_pressure, label='Lubricated pressure')
-        ax[0].plot(X_nd, hertzian_pressure_dist[:, hertzian_pressure_dist.shape[1] // 2] / hertz_pressure,
-                   label='Hertz pressure')
-        ax[0].set_ylabel('Non-dimensional pressure')
-        ax[0].legend()
-        ax[0].set_title('Line contact non-dimensional pressure')
-        ax[1].plot(X_nd, nd_gap)
-        ax[1].set_xlabel('Non-dimensional length')
-        ax[1].set_ylabel('Non-dimensional film thickness')
-        ax[1].set_title('Line contact non-dimensional film thickness')
-        fig.tight_layout()
+        pressure_data = np.column_stack((X_nd, nd_pressure))
+        thickness_data = np.column_stack((X_nd, nd_gap))
+        np.savetxt('nd_pressure_vs_x.csv', pressure_data, delimiter=',', header='X_nd,nd_pressure', comments='')
+        np.savetxt('nd_film_thickness_vs_x.csv', thickness_data, delimiter=',', header='X_nd,nd_film_thickness', comments='')
+        fig_pressure, ax_pressure = plt.subplots(figsize=(10, 4))
+        ax_pressure.plot(X_nd, nd_pressure, label='Reynolds pressure')
+        ax_pressure.set_ylabel('Non-dimensional pressure')
+        ax_pressure.set_xlabel('Non-dimensional length')
+        ax_pressure.set_title('Line contact non-dimensional pressure')
+        ax_pressure.legend()
+        fig_thickness, ax_thickness = plt.subplots(figsize=(10, 4))
+        ax_thickness.plot(X_nd, nd_gap)
+        ax_thickness.set_ylabel('Non-dimensional film thickness')
+        ax_thickness.set_xlabel('Non-dimensional length')
+        ax_thickness.set_title('Line contact non-dimensional film thickness')
+        fig_pressure.tight_layout()
+        fig_thickness.tight_layout()
         plt.show()
     return {
         'state': state,
