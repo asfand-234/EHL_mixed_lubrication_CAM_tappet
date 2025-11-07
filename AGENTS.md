@@ -6,3 +6,4 @@ The code must only two 1D plots seperately. 1) Non-dimensional pressure (from re
 3) saves two data files for both graphs.
 
 Do not make any other changes except what is required for smooth  convergece.
+And generate only complete ready to paste google colab script without missing any line.
