@@ -2,19 +2,25 @@
 # CAM–SHIM (Bucket Tappet) — 1D Mixed Lubrication line contact)
 # ============================================================
 
-DATA_DIR = "/content/cam"   # <--- put your folder path here
-CAM_FILE = "updated_lift.txt"
-
-import os, numpy as np, pandas as pd
+import argparse
+import os
+from pathlib import Path
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from math import pi, ceil
-from scipy.signal import savgol_filter
+from scipy.signal import savgol_filter, fftconvolve
 plt.rcParams.update({"figure.dpi": 120})
 
+HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+DATA_DIR = "/content/cam"   
+CAM_FILE = "updated_lift.txt"
+
 # =======================
-# USER: set test temperature (°C) 
+# USER: default test temperature (°C)
 # =======================
-TEMP_C = 60  # <-- set to 60, 90, or 110 before running
+DEFAULT_TEMP_C = 90  # valid options: 60, 90, 110
+TEMP_C = DEFAULT_TEMP_C
 
 def _load_cam(data_dir, fname):
     path = os.path.join(data_dir, fname)
@@ -44,12 +50,12 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-
+E_eff    = 1.2
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
 ETA0_TABLE     = {60: 0.04496, 90: 0.01381, 110: 0.008155}    # Pa·s
-ALPHA0_TABLE   = {60: 21e-9,   90: 16e-9,    110: 10e-9}      # Pa^-1
+ALPHA0_TABLE   = {60: 21e-9,   90: 15e-9,    110: 10e-9}      # Pa^-1
 RHO0_TABLE     = {60: 887.0,   90: 858.44,   110: 840.0}      # kg/m^3
 MU_B_TABLE     = {60: 0.12,    90: 0.11,     110: 0.10}
 GAMMA_LIM_TABLE= {60: 0.07,    90: 0.06,     110: 0.06}       # 1/Pa
@@ -63,8 +69,8 @@ P0_HOUPERT     = 1.98e8
 C_ROELANDS     = 5.1e-9
 T_SHIFT        = 138.0
 
-K_THERM_TABLE  = {60: 0.10, 90: 0.14, 110: 0.14}
-GAMMA_TH_TABLE = {60: 3.5e-4, 90: 6.5e-4, 110: 6.5e-4}
+K_THERM_TABLE  = {60: 0.10, 90: 0.12, 110: 0.14}
+GAMMA_TH_TABLE = {60: 3.5e-4, 90: 5.5e-4, 110: 6.5e-4}
 
 if TEMP_C not in (60, 90, 110):
     raise ValueError("TEMP_C must be one of {60, 90, 110}.")
@@ -210,13 +216,18 @@ def ph_hertz(W,a):
 # Elastic deflection (plane strain log-kernel) 
 # ============================================================
 def elastic_deflection(x, p):
-    x = np.asarray(x, float); p = np.asarray(p, float)
-    N  = len(x); dx = x[1]-x[0]; eps = 0.9*dx
-    u = np.zeros_like(x)
-    for i in range(N):
-        u[i] = np.sum(p * np.log(np.sqrt((x[i]-x)**2 + eps*eps))) * dx
-    u = u * (2.0/(np.pi*E_star))
-    # Remove the mean to anchor the displacement; only relative deflection matters.
+    x = np.asarray(x, float)
+    p = np.asarray(p, float)
+    N = len(x)
+    if N <= 1:
+        return np.zeros_like(x)
+
+    dx = x[1] - x[0]
+    eps = 0.9 * dx
+    grid = (np.arange(-N + 1, N, dtype=float)) * dx
+    kernel = np.log(np.sqrt(grid * grid + eps * eps))
+    conv = fftconvolve(p, kernel, mode="same") * dx
+    u = conv * (2.0 / (np.pi * E_star))
     u -= np.mean(u)
     return u
 
@@ -273,11 +284,8 @@ def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture):
 
     # Periodic pocket centers with pitch d_texture
     u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
-
-    # Enforce: w_texture is FULL width
-    # h(0) = atex_theta, h(±w_texture/2) = g_val
     expo = np.log(g_val / atex_theta) * (4.0 * u**2) / (w_texture**2 + 1e-30)
-    h = atex_theta * np.exp(expo)
+    h = E_eff*atex_theta * np.exp(expo)
 
     return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
 
@@ -290,162 +298,201 @@ def phi_x_func(h, sigma=sigma_combined):
 
 def phi_s_func(h, sigma=sigma_combined):
     return np.zeros_like(h)
+# ============================================================
+# CORE SOLVER (per cam angle): mass-conserving Reynolds solver
+# - Contact core:     X = x/a ∈ [-1, +1]  (pressure unknown lives here)
+# - Extended window:  X ∈ [X_in, X_out]   (film/advection/elasticity)
+# ============================================================
+def _clamp01(z):
+    return np.minimum(1.0, np.maximum(0.0, z))
 
-# ============================================================
-# CORE SOLVER (per cam angle):  Reynolds equation solver 
-# ============================================================
 def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 atex_theta, shift_theta, d_texture,
                 Nx=171, iters=80, substep_cap=6, relax_p=0.75, relax_h=0.55,
                 M_core=451, observe=True):
 
-    # Geometry
-    R = float(max(R, 1e-12))
-    W = float(max(W, 1e-6))   # numerical floor only; no artificial 1 N bias
+    CFL_TARGET = 8.0
 
-    a  = max(a_hertz(W, R), 1e-6)
-    ph = max(ph_hertz(W, a), 1e3)
+    # ---------------- Geometry & scales ----------------
+    R = float(max(R, 1e-12))
+    W = float(max(W, 1e-6))          # numerical floor; no artificial bias
+    a  = max(a_hertz(W, R), 1e-6)    # Hertz half-width
+    ph = max(ph_hertz(W, a), 1e3)    # Hertz peak pressure scale
 
     h_floor = 1.0e-9
 
-    # Extended film grid (pressure will be embedded from core)
+    # ---------------- Extended window on x ----------------
+    # X window is for film/elastic/advection; pressure is zero outside |X|<=1
     xL, xR = X_in*a, X_out*a
-    x  = np.linspace(xL, xR, Nx)
+    x  = np.linspace(xL, xR, int(max(Nx, 171)))
     dx = x[1] - x[0]
-    # Refine x-grid only when texture is on (to resolve microfeatures in D/RHS)
-    if atex_theta > 0.0 and Nx < 401:
-        Nx_ref = 401
-        x  = np.linspace(xL, xR, Nx_ref)
-        dx = x[1] - x[0]
+    X  = x / a                         # normalized coordinate on the extended window
 
-    # Core ND grid
-    S_WIN = 1.3
-    s  = np.linspace(-S_WIN, S_WIN, int(M_core))
+    # ---------------- Contact core grid (pressure unknown) ----------------
+    # STRICT core: X ∈ [-1, +1]
+    s  = np.linspace(-1.0, +1.0, int(M_core))   # "s" is the normalized X on the core
     xs = a * s
     dS = s[1] - s[0]
 
-    # Base seed for central film (then texture + elastic) and initial nominal shape
-    h0 = central_film_thickness(R, W, Ve)
-
-    # Texture contribution
+    # ---------------- Base seeds ----------------
+    h0   = central_film_thickness(R, W, Ve)
     htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
 
-    # Initial film guess (nominal parabolic + texture)
-    h_shift = 0.0
-    h  = np.maximum(h0 + h_shift + x**2/(2*R) + htex, h_floor)
+# --- NEW: zero-mean the texture over the loaded region and cap its lift ---
+    if atex_theta > 0.0:
+    # zero-mean within |x|<=a so the texture does not add a DC gap
+       mask_loaded = (x >= -a) & (x <= a)
+       mean_htex = np.mean(htex[mask_loaded]) if np.any(mask_loaded) else 0.0
+       htex = htex - mean_htex
+    # cap upward excursions relative to the Hamrock–Dowson seed
+       htex = np.minimum(htex, 3.0 * h0)
 
-    # Placeholders for previous nominal film to approximate squeeze
+# Initial film guess (nominal parabolic + texture)
+    h_shift = 0.0
+    h = np.maximum(h0 + h_shift + x**2/(2*R) + htex, h_floor)
+
+
+    # Keep previous nominal film for squeeze derivative
     h_nom_prev = h.copy()
 
-    # Initial ND pressure core (Hertz-like seed)
+    # Initial ND pressure on core: Hertz-like seed, zero outside |X|<=1 by construction
     P_core = np.sqrt(np.maximum(1.0 - s**2, 0.0))
 
-    # Helper to embed dimensional p(x) from core ND P(s)
+    # Helper: embed P_core(s) → dimensional p(x) on extended window, zero for |X|>1
     def embed_p(P_core_vec):
         p_full = np.zeros_like(x)
-        inside = (x >= -S_WIN*a) & (x <= S_WIN*a)
+        inside = (X >= -1.0) & (X <= +1.0)
         if inside.any():
             P_vals = np.interp(x[inside], xs, np.maximum(P_core_vec, 0.0))
             p_full[inside] = P_vals * ph
         return p_full
 
-    # Smoother weights
-    K0, K1 = 0.95, 0.025
+    # Substep control (advection CFL)
+    u1_local = abs(Ve)
+    cfl  = u1_local * dt / (dx + 1e-30)
+    base_needed = int(max(2, np.ceil(cfl / CFL_TARGET)))
+    if substep_cap is None:
+        total_substeps = base_needed
+    else:
+        max_substeps = max(2, int(substep_cap))
+        if base_needed <= max_substeps:
+            total_substeps = base_needed
+        else:
+            batches = int(np.ceil(base_needed / max_substeps))
+            total_substeps = batches * max_substeps
+    total_substeps = max(total_substeps, 2)
+    dts  = dt / float(total_substeps)
 
-    # Substepping for modest squeeze approximation & stability
-    u1_local = np.abs(Ve)
-    cfl  = np.abs(u1_local)*dt/(dx + 1e-30)
-    substeps = int(min(max(2, np.ceil(cfl/0.35)), substep_cap))
-    dts  = dt / max(substeps, 1)
-
-    # previous dimensional pressure for dp/dt in compressible squeeze
+    # Previous pressure for dp/dt and film-fraction (Elrod–Adams)
     p_prev = embed_p(P_core).copy()
+    theta  = np.ones_like(x)  # film fraction θ (1=full film, 0=cavitated)
 
-    for _sub in range(substeps):
-        # Interpolate fields to core to get the current dimensional pressure
+    # ------------- Substep loop -------------
+    for _sub in range(total_substeps):
+
+        # Current embedded pressure & elastic deflection
         p_embed = embed_p(P_core)
-
-        # Include elastic deflection in the film used for the squeeze derivative
         defl_sub = elastic_deflection(x, p_embed)
 
-        # Construct film for squeeze FD-in-time USING elastic deflection
-        h_nom = np.maximum(h0 + x**2/(2*R) + defl_sub + htex, 5e-9)
-        dhdt  = (h_nom - h_nom_prev)/max(dts, 1e-12)
+        # Nominal film used in squeeze derivative (with elasticity)
+        h_nom = np.maximum(h0 + x**2/(2.0*R) + defl_sub + htex, 5e-9)
+        dhdt  = (h_nom - h_nom_prev) / max(dts, 1e-12)
         h_nom_prev = h_nom.copy()
 
-        # --- constitutive fields ---
+        # --- Rheology & density ---
         eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h_nom, a)
         rho_dim = rho_dowson_higginson(p_embed, dT_field)
         drdp    = drho_dp_numeric(p_embed, dT_field, Ve, h_nom, a)
-        phi_x = phi_x_func(h_nom)
+        phi_x   = phi_x_func(h_nom)
 
-        # --- mobility D(s) 
+        # --- Effective viscosity for mobility (Carreau) ---
         dpdx     = np.gradient(p_embed, x)
         gdot_p   = np.abs(0.5 * np.maximum(h_nom,1e-12) * np.abs(dpdx) / (eta_dim + 1e-30))
         gdot_eff = np.sqrt( (np.maximum(np.abs(Vs),1e-6)/np.maximum(h_nom,1e-12))**2 + gdot_p**2 )
         eta_eff_Re = eta_carreau(eta_dim, h_nom, gdot_eff)
-        D_full = (phi_x * (h_nom**3) * rho_dim*ph ) / (12.0 * eta_eff_Re*(a**2)  + 1e-30)
 
-        # --- RHS in s-form: 
-        q = rho_dim * np.maximum(h_nom, 1e-12)
+        # --- Mass-conserving cavitation (Elrod–Adams) ---
+        theta = _clamp01(theta)
+
+        # Mobility D only where θ>0 (filled film); Poiseuille part is shut off with θ
+        D_full = (phi_x * (h_nom**3) * rho_dim * ph * theta) / (12.0 * eta_eff_Re * (a**2) + 1e-30)
+
+        # Advected mass is ρ h θ
+        q = rho_dim * np.maximum(h_nom, 1e-12) * theta
         u = Ve
 
-        # Build nominal seed on both ends for sign-aware inflow
-        h_nom_seed = np.maximum(h0 + x**2/(2*R) + htex, 5e-9)
+        # Inflow states (full film at bulk density) for upwind Rusanov
+        h_nom_seed = np.maximum(h0 + x**2/(2.0*R) + htex, 5e-9)
         h_left, h_right = h_nom_seed[0], h_nom_seed[-1]
-
         if u >= 0.0:
-            # Inflow from left, outflow to right
-            q_in_left  = PHI_IN * rho0 * h_left
-            q_in_right = q[-1]  # outflow extrapolation
+            q_in_left  = PHI_IN * rho0 * h_left * 1.0  # θ=1 at inlet
+            q_in_right = q[-1]
         else:
-            # Inflow from right, outflow to left
-            q_in_left  = q[0]   # outflow extrapolation
-            q_in_right = PHI_IN * rho0 * h_right
+            q_in_left  = q[0]
+            q_in_right = PHI_IN * rho0 * h_right * 1.0
 
-        div_adv = rusanov_div_bc(u, q, dx, q_in_left, q_in_right)
-        term_adv   = div_adv                                          
+        # Conservative advection of mass ρ h θ
+        term_adv = rusanov_div_bc(u, q, dx, q_in_left, q_in_right)
 
+        # Compressible squeeze with θ; ∂t(ρ h θ) = ρ θ ∂t h + h θ ∂ρ/∂p ∂t p   (Poiseuille is handled by diffusion operator)
         dpdt_embed   = (p_embed - p_prev) / max(dts, 1e-12)
-        term_squeeze = (rho_dim * dhdt + h_nom * drdp * dpdt_embed)    
+        term_squeeze = (rho_dim * theta * dhdt + h_nom * theta * drdp * dpdt_embed)
+
         RHS_full = term_adv + term_squeeze
 
-        # Map to core grid
+        # Map to core (|X|<=1) and assemble diffusion operator on s-grid
+        inside_core = (X >= -1.0) & (X <= +1.0)
         D_core   = np.interp(xs, x, D_full)
         RHS_core = np.interp(xs, x, RHS_full)
 
-        # Assemble tridiagonal for ND P on s-grid with cavitation handling
         M = len(xs)
         A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
-        invdS2 = 1.0/(dS*dS + 1e-30)
+        invdS2 = 1.0 / (dS*dS + 1e-30)
 
-        # Boundary: p=0 at ends
-        B[0]=1.0; RHS[0]=0.0
+        # Boundary: p=0 at X = ±1
+        B[0] = 1.0; RHS[0] = 0.0
         for j in range(1, M-1):
             Dw = 0.5*(D_core[j] + D_core[j-1])
             De = 0.5*(D_core[j] + D_core[j+1])
-            A[j] = -Dw*invdS2
-            C[j] = -De*invdS2
+            A[j] = -Dw * invdS2
+            C[j] = -De * invdS2
             B[j] = -(A[j] + C[j]) + 1e-12
             RHS[j] = RHS_core[j]
-        B[M-1]=1.0; RHS[M-1]=0.0
+        B[M-1] = 1.0; RHS[M-1] = 0.0
 
-        # Thomas solve
+        # Thomas solve on core
         for j in range(1, M):
-            wfac = A[j]/(B[j-1] + 1e-30)
-            B[j]   -= wfac*C[j-1]
-            RHS[j] -= wfac*RHS[j-1]
+            wfac = A[j] / (B[j-1] + 1e-30)
+            B[j]   -= wfac * C[j-1]
+            RHS[j] -= wfac * RHS[j-1]
         P_new = np.zeros(M)
-        P_new[-1] = RHS[-1]/(B[-1] + 1e-30)
+        P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
         for j in range(M-2, -1, -1):
-            P_new[j] = (RHS[j] - C[j]*P_new[j+1])/(B[j] + 1e-30)
+            P_new[j] = (RHS[j] - C[j]*P_new[j+1]) / (B[j] + 1e-30)
 
-        # Enforce cavitation
+        # ---- Elrod–Adams complementarity update ----
+        # p>=0 automatically from solve (no negative pressures)
         P_new = np.maximum(P_new, 0.0)
+        p_tmp = embed_p(P_new)  # dimensional p on x-grid
 
-        # --- gentle load relaxation each substep (preserves local shape) ---
-        p_tmp  = embed_p(P_new)
-        Wa_sub = np.trapezoid(asperity_pressure_greenwood_tripp(np.maximum(h_nom,h_floor)), x) * L
+        # Where pressure exists → full film; where p=0 → update θ by mass balance (no Poiseuille there)
+        full_mask = (p_tmp > 0.0)
+        cav_mask  = ~full_mask
+
+        theta[full_mask] = 1.0
+
+        # Explicit θ-update in cavitated zones from conservative advection+squeeze:
+        den_cav = (rho_dim[cav_mask] * np.maximum(h_nom[cav_mask], 1e-12) + 1e-30)
+        theta[cav_mask] = _clamp01(
+            theta[cav_mask]
+            - dts * (
+                term_adv[cav_mask] / den_cav
+                + theta[cav_mask] * (rho_dim[cav_mask] * dhdt[cav_mask]) / den_cav
+              )
+        )
+
+        # ---- Gentle load relaxation (preserve local shape) ----
+        Wa_sub = np.trapezoid(asperity_pressure_greenwood_tripp(np.maximum(h_nom, h_floor)), x) * L
         Wh_sub = np.trapezoid(p_tmp, x) * L
         total_load = Wa_sub + Wh_sub
         if total_load > 1e-18:
@@ -454,50 +501,48 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 if Wh_sub > 1e-18:
                     s_relax = np.clip(Wh_target/(Wh_sub + 1e-30), 0.0, 1.0)
                     P_new *= s_relax
-                    Wh_sub *= s_relax
-                total_load = Wa_sub + Wh_sub
+                    p_tmp = embed_p(P_new)
             else:
                 load_ratio = W/(total_load + 1e-30)
                 if load_ratio < 1.0:
                     s_relax = np.clip(load_ratio, 0.10, 1.0)
                     P_new *= s_relax
-                    Wh_sub *= s_relax
-                    total_load = Wa_sub + Wh_sub
-        else:
-            total_load = 1e-18
-
+                    p_tmp = embed_p(P_new)
+        # h-shift controller (rigid approach) — small, angle-weighted
         gap_baseline = max(np.median(h_nom), h_floor)
-        load_error = W - total_load
-        load_norm = np.clip(load_error/(abs(W) + 1e-30), -1.0, 1.0)
-        gap_relax = 0.45
+        load_error   = W - (np.trapezoid(asperity_pressure_greenwood_tripp(np.maximum(h_nom, h_floor)), x)*L
+                            + np.trapezoid(p_tmp, x)*L)
+        load_norm    = np.clip(load_error/(abs(W) + 1e-30), -1.0, 1.0)
+        gap_relax    = 0.45
         angle_weight = np.exp(-((angle_deg)/18.0)**2)
-        gap_relax_eff = gap_relax * (0.35 + 0.65*angle_weight)
-        h_shift -= gap_relax_eff * load_norm * gap_baseline
-        h_shift = np.clip(h_shift, h_floor - h0, 1.25*h0)
+        h_shift -= (gap_relax * (0.35 + 0.65*angle_weight)) * load_norm * gap_baseline
+        h_shift  = np.clip(h_shift, h_floor - h0, 1.25*h0)
         if Ve >= 0.0:
             h_shift = max(h_shift, -0.25*h0)
 
-        # Relax + light smoothing
-        P_core = (1 - relax_p) * P_core + relax_p * P_new
+        # ---- Relaxation of the ND pressure on core ----
+        P_core = (1.0 - relax_p) * P_core + relax_p * P_new
+        # mild smoothing (optional)
         Ptmp = P_core.copy()
-        P_core[1:-1] = K1*Ptmp[:-2] + K0*Ptmp[1:-1] + K1*Ptmp[2:]
+        if len(P_core) >= 3:
+            P_core[1:-1] = 0.025*Ptmp[:-2] + 0.95*Ptmp[1:-1] + 0.025*Ptmp[2:]
         P_core[0]  = 0.0
         P_core[-1] = 0.0
 
+        # Save for next substep
         p_prev = embed_p(P_core).copy()
 
-        # Update film (elastic + texture)
+        # ---- Update film with elasticity at the *current* pressure ----
         defl  = elastic_deflection(x, p_prev)
-        h_candidate = np.maximum(h0 + h_shift + x**2/(2*R) + defl + htex, h_floor)
+        h_candidate = np.maximum(h0 + h_shift + x**2/(2.0*R) + defl + htex, h_floor)
         h = np.maximum(relax_h*h + (1.0-relax_h)*h_candidate, h_floor)
 
-    # Final pass & dimensional fields
+    # ---------------- Final fields on extended window ----------------
     p = embed_p(P_core)
-    # Consistency update: compute final deflection once (no ex-post scaling)
     defl_final = elastic_deflection(x, p)
-    h = np.maximum(h0 + h_shift + x**2/(2*R) + defl_final + htex, h_floor)
+    h = np.maximum(h0 + h_shift + x**2/(2.0*R) + defl_final + htex, h_floor)
 
-    # Mixed loads
+    # Mixed load split
     p_asp_final = asperity_pressure_greenwood_tripp(h)
     Wa_raw = np.trapezoid(p_asp_final, x) * L
     Wh_now = np.trapezoid(p, x) * L
@@ -511,30 +556,27 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     else:
         Wa_final = np.maximum(Wa_raw + min(load_deficit, 0.0), 0.0)
 
-    # === Friction (hydrodynamic + boundary) ===
+    # Friction (hydrodynamic + boundary)
     eta_w, _dT_f = eta_houpert(p, TEMP_C, Ve, h, a)
     dpdx   = np.gradient(p, x)
-# Shear rate magnitude for viscosity
     gdot_wall = np.maximum(np.abs(Vs) / np.maximum(h, 1e-12), 1e-6)
     eta_w_sh  = eta_carreau(eta_w, h, gdot_wall)
 
-# Signed shear stresses
-    tau_c = np.where(h > 1e-12, eta_w_sh * Vs / h, 0.0)       # Couette: sign from Vs
-    tau_p = 0.5 * h * dpdx                                   # Poiseuille: sign from dp/dx
-
+    tau_c  = np.where(h > 1e-12, eta_w_sh * Vs / h, 0.0)
+    tau_p  = 0.5 * h * dpdx
     tau_tot = tau_c + tau_p
 
-# Symmetric limiting: |tau| <= gamma_lim * p
     tau_lim = gamma_lim * np.maximum(p, 0.0)
     tau_eff = np.clip(tau_tot, -tau_lim, tau_lim)
-
 
     Fh = np.trapezoid(tau_eff, x) * L
     Fb = L * np.trapezoid(mu_b * p_asp_final, x)
 
     return {
-        "x": x, "p": p, "h": h, "Fh": float(Fh), "Fb": float(Fb),
-        "Wa": float(Wa_final), "a": float(a), "pmax": float(np.max(p)),
+        "x": x, "X": X, "p": p, "h": h,
+        "Fh": float(Fh), "Fb": float(Fb),
+        "Wa": float(Wa_final), "a": float(a),
+        "pmax": float(np.max(p)),
         "p_asp_x": p_asp_final
     }
 
@@ -574,14 +616,14 @@ PLOT_OPTS = {
         "Fh": {
             "ENABLE": True,
             "angles_deg": None,
-            "rpms": [900],
+            "rpms": [300],
             "surface_state": 0,
             "texture_densities": [8],
         },
         "Fb": {
             "ENABLE": True,
             "angles_deg": None,
-            "rpms": [900],
+            "rpms": [300],
             "surface_state": 0,
             "texture_densities": [8],
         },
@@ -613,13 +655,13 @@ PLOT_OPTS = {
         "densities_vs_UN": [5, 8, 10],
     },
     "HTEX_300RPM": {
-        "ENABLE": True,
+        "ENABLE": False,
         "texture_densities": [5, 8, 10],
         "style": {"lw": 2.0, "grid_alpha": 0.35},
     },
     # ---------------- Single-variable vs angle (Ve, Vs, W, R, a_hertz, ph, hc) ----------------
     "VARIABLE_BY_ANGLE": {
-        "ENABLE": True,                 # set True to plot
+        "ENABLE": False,                 # set True to plot
         "variable": "Ve",               # one of: "Ve","Vs","W","R","a_hertz","ph","hc"
         "rpms": [300],                  # single RPM or list
         "style": {"lw": 2.0, "grid_alpha": 0.35, "dpi": 120},
@@ -1279,11 +1321,10 @@ def section_avg_torque_reduction():
                 textured=True,
                 density_key=dk,
             )
-            red = (
-                100.0 * (T_un - T_tex) / abs(T_un)
-                if abs(T_un) > 1e-12
-                else 0.0
-            )
+# Use a robust denominator and magnitude-based comparison to avoid blow-ups
+            den = max(abs(T_un), 1e-6)
+            red = 100.0 * (abs(T_un) - abs(T_tex)) / den
+
             print(
                 f"          {dk:>3} <T> = {T_tex:.6f} N·m   (Δ% = {red:+.2f}%)"
             )
@@ -1438,7 +1479,6 @@ def run_all():
     section_avg_torque()
     section_avg_torque_reduction()
     plt.show()
-
 # ----- Execute -----
 if __name__ == "__main__":
     run_all()
