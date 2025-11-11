@@ -13,7 +13,7 @@ from scipy.signal import savgol_filter, fftconvolve
 plt.rcParams.update({"figure.dpi": 120})
 
 HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-DATA_DIR = "/content/cam"   
+DATA_DIR = "cam"
 CAM_FILE = "updated_lift.txt"
 
 # =======================
@@ -50,7 +50,7 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-E_eff    = 1.2
+E_eff    = -6000.0
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
@@ -88,7 +88,7 @@ k_lub     = K_THERM_TABLE[TEMP_C]
 gamma_th  = GAMMA_TH_TABLE[TEMP_C]
 
 # ============================================================
-# Greenwood–Tripp constants 
+# Greenwood–Tripp constants
 # ============================================================
 sigma_combined = 0.2e-6
 beta_a         = sigma_combined/0.001
@@ -179,7 +179,7 @@ def asperity_pressure_greenwood_tripp(h):
     return (pref * F32).reshape(lam.shape)
 
 # ============================================================
-# Film seed (Hamrock–Dowson, line-contact 
+# Film seed (Hamrock–Dowson, line-contact
 # ============================================================
 def central_film_thickness(R, W, Ve):
     R = float(np.clip(R, 1e-7, None))
@@ -200,7 +200,7 @@ def kin_arrays(rpm):
     Vc = (rb + lift + d2lift_s ) * w
     Ve = 0.5 * (Vc + Vf)
     Vs = Vc - Vf
-    W = k_spring * (lift + delta) + Meq * (w**2) * d2lift_s 
+    W = k_spring * (lift + delta) + Meq * (w**2) * d2lift_s
     return R, Ve, Vs, W, w
 
 # ============================================================
@@ -213,7 +213,7 @@ def ph_hertz(W,a):
     return 2.0*np.maximum(W,0.0)/(np.pi*np.maximum(a,1e-12)*L + 1e-30)
 
 # ============================================================
-# Elastic deflection (plane strain log-kernel) 
+# Elastic deflection (plane strain log-kernel)
 # ============================================================
 def elastic_deflection(x, p):
     x = np.asarray(x, float)
@@ -262,13 +262,13 @@ def rusanov_dqdx_bc(q, dx, q_in_left, q_in_right, alpha=1.0):
 # ============================================================
 # TEXTURE MODEL
 # ============================================================
-w_texture = 35e-6       # [m] 
+w_texture = 35e-6       # [m]
 g_val     = 1e-9        # [m]
 x_start   = 0.0
 X_in, X_out = -4.5, 3.0
 
 D_TEXTURE = {"5%": 700e-6, "8%": 437.5e-6, "10%": 350e-6}
-A_TEXTURE_CONST = 4e-6     
+A_TEXTURE_CONST = 4e-6
 TEXTURE_ZONE_MASK = np.ones_like(TH_DEG, dtype=bool)
 
 def integrate_shift(Vs, w):
@@ -581,7 +581,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     }
 
 #============================================================
-# PLOT CONTROLLER & UTILITIES 
+# PLOT CONTROLLER & UTILITIES
 # ============================================================
 def _as_list(v):
     return list(v) if isinstance(v, (list, tuple, np.ndarray)) else [v]
@@ -589,14 +589,14 @@ def _as_list(v):
 PLOT_OPTS = {
     "PROFILES": {
         "PRESSURE": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": [10],
             "rpms": [300],
             "surface_state": 0,         # 0 = UNTEXTURED, 1 = TEXTURED
             "texture_densities": [8],
         },
         "FILM": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": [10],
             "rpms": [300],
             "surface_state": 0,
@@ -604,7 +604,7 @@ PLOT_OPTS = {
         },
         # New: asperity pressure vs X = x/a (same controls as Reynolds pressure)
         "ASPERITY": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": [10],
             "rpms": [300],
             "surface_state": 0,         # 0 = UNTEXTURED, 1 = TEXTURED
@@ -614,14 +614,14 @@ PLOT_OPTS = {
     },
     "SWEEPS": {
         "Fh": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": None,
             "rpms": [300],
             "surface_state": 0,
             "texture_densities": [8],
         },
         "Fb": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": None,
             "rpms": [300],
             "surface_state": 0,
@@ -651,8 +651,8 @@ PLOT_OPTS = {
     },
     "AVG_TORQUE_REDUCTION": {
         "ENABLE": True,
-        "rpms": [300, 500, 700, 900],
-        "densities_vs_UN": [5, 8, 10],
+        "rpms": [900],
+        "densities_vs_UN": [10],
     },
     "HTEX_300RPM": {
         "ENABLE": False,
@@ -1357,7 +1357,7 @@ def plot_htex_vs_angle_300rpm():
         for i in range(len(TH_DEG)):
             a = a_hertz(W[i], R[i])
             atex_i = (
-                A_TEXTURE_CONST if TEXTURE_ZONE_MASK[i] else 0.0
+                A_TEXTURE_CONST if TEXTURE_ZONE_MASK[j] else 0.0
             )
             h0list.append(
                 htex_profile(
