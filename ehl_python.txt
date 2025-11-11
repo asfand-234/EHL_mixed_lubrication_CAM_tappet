@@ -19,7 +19,7 @@ CAM_FILE = "updated_lift.txt"
 # =======================
 # USER: default test temperature (°C)
 # =======================
-DEFAULT_TEMP_C = 90  # valid options: 60, 90, 110
+DEFAULT_TEMP_C = 110  # valid options: 60, 90, 110
 TEMP_C = DEFAULT_TEMP_C
 
 def _load_cam(data_dir, fname):
@@ -50,7 +50,7 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-E_eff    = 1.2
+E_eff    = -800
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
@@ -1482,3 +1482,4 @@ def run_all():
 # ----- Execute -----
 if __name__ == "__main__":
     run_all()
+
