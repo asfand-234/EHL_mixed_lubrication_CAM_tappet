@@ -16,4 +16,5 @@ HARD STRICT RULES:
 3) Do not add any non-physical or non-logical clipping, conditions or boundness.
 
 ACCEPTANCE CRITERIA:
-If above all 3 tasks achieved then only generate update complete script ready to paste for me without missing any line. Do not provide any results.
+You must run the entire code everytime and analyze the data and graphs and computational time. If above all 3 tasks achieved then only generate update complete script ready to paste for me without missing any line. Do not provide any results.
+ 
