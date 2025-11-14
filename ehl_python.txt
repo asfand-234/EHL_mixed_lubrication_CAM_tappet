@@ -178,17 +178,6 @@ def asperity_pressure_greenwood_tripp(h):
     pref = (4.739075) * E_star * np.sqrt(sigma_combined/beta_a) * (beta_a *eta_R * sigma_combined)**2
     return (pref * F32).reshape(lam.shape)
 
-# ============================================================
-# Film seed (Hamrock–Dowson, line-contact 
-# ============================================================
-def central_film_thickness(R, W, Ve):
-    R = float(np.clip(R, 1e-7, None))
-    W = float(np.clip(W, 1e-7, None))
-    U = (eta0 * np.abs(Ve))/(E_star * R + 1e-30)
-    G = alpha0 * E_star
-    W_star = W / (E_star * L * R + 1e-30)
-    hc = 3.06 * (U**0.69) * (G**0.56) * (W_star**-0.1) * R
-    return float(np.clip(hc, 5e-9, 600e-8))
 
 # ============================================================
 # KINEMATICS (lift smoothing, curvature, speeds, load)
@@ -1509,3 +1498,4 @@ def run_all():
 # ----- Execute -----
 if __name__ == "__main__":
     run_all()
+
