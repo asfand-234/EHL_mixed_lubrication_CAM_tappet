@@ -183,7 +183,7 @@ def asperity_pressure_greenwood_tripp(h):
 # ============================================================
 def central_film_thickness(R, W, Ve):
     R = float(np.clip(R, 1e-7, None))
-    W = float(np.clip(W, 0.0, None))
+    W = float(np.clip(W, 1e-7, None))
     U = (eta0 * np.abs(Ve))/(E_star * R + 1e-30)
     G = alpha0 * E_star
     W_star = W / (E_star * L * R + 1e-30)
@@ -195,6 +195,16 @@ def central_film_thickness(R, W, Ve):
 # ============================================================
 def kin_arrays(rpm):
     R = np.maximum(rb + lift + d2lift_s, 1e-7)
+    r    = rb + lift          # [m], distance from cam centre to contact
+    dr   = dlift_s            # dr/dθ = dL/dθ [m/rad]
+    d2r  = d2lift_s           # d²r/dθ² = d²L/dθ² [m/rad²]
+
+    # --- Cam radius of curvature in polar coordinates (standard formula)
+    #     R_c = ( (r² + dr²)^(3/2) ) / (r² + 2 dr² - r d²r/dθ² )
+    num = (r**2 + dr**2)**1.5
+    den = r**2 + 2.0*dr**2 - r*d2r
+    #R  = num / (den + 1e-30)
+    #R  = np.maximum(R, 1e-7)
     w = 2.0*np.pi*float(rpm)/60.0
     Vf = d2lift_s  * w
     Vc = (rb + lift + d2lift_s ) * w
@@ -300,6 +310,7 @@ def phi_s_func(h, sigma=sigma_combined):
     return np.zeros_like(h)
 # ============================================================
 # CORE SOLVER (per cam angle): mass-conserving Reynolds solver
+# h0 is obtained by iterative load balance (Chong et al. style)
 # ============================================================
 
 def _clamp01(z):
@@ -310,17 +321,21 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 Nx=171, iters=80, substep_cap=6, relax_p=0.75, relax_h=0.55,
                 M_core=451, observe=True):
 
-    CFL_TARGET = 0.4
+    # ---- Global numerical controls ----
+    CFL_TARGET   = 0.5          # advection CFL target
+    LOAD_TOL     = 0.01         # |W_num - W_target| / W_target tolerance
+    MAX_H0_ITERS = 8            # outer iterations for h0
+    XI_H0        = 0.6          # exponent in h0 update (eq. 39 style)
 
     # ---------------- Geometry & scales ----------------
     R = float(max(R, 1e-12))
-    W = float(max(W, 1e-6))
-    a  = max(a_hertz(W, R), 1e-6)    # Hertz half-width
-    ph = max(ph_hertz(W, a), 1e3)    # Hertz peak pressure scale
+    W_target = float(max(W, 1e-6))        # target external load per cam angle
+    a  = max(a_hertz(W_target, R), 1e-6)  # Hertz half-width
+    ph = max(ph_hertz(W_target, a), 1e3)  # Hertz peak pressure scale
 
-    h_floor = 1.0e-9                # min physical film to avoid division by 0
-    gdot_max  = 1.0e8               # cap on shear rate [1/s]
-    D_cap     = 1.0e14              # cap on mobility (dimensionless-ish)
+    h_floor  = 1.0e-9                     # min physical film
+    gdot_max = 1.0e8                      # cap on shear rate [1/s]
+    D_cap    = 1.0e14                     # cap on mobility
 
     # ---------------- Extended window on x ----------------
     xL, xR = X_in * a, X_out * a
@@ -334,8 +349,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     xs = a * s                                  # dimensional positions of core nodes
     dS = s[1] - s[0]
 
-    # ---------------- Base seeds ----------------
-    h0   = central_film_thickness(R, W, Ve)     # Hamrock–Dowson central film
+    # ---------------- Texture profile (independent of h0) ----------------
     htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
 
     # Zero-mean the texture within the loaded region |x| <= a, then cap positive peaks
@@ -343,28 +357,10 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         mask_loaded = (x >= -a) & (x <= a)
         mean_htex = np.mean(htex[mask_loaded]) if np.any(mask_loaded) else 0.0
         htex = htex - mean_htex
-        htex = np.minimum(htex, 3.0 * h0)
+        # cap upward excursions relative to a nominal gap scale (few σ)
+        htex = np.minimum(htex, 3.0 * 3.0 * sigma_combined)
 
-    # Initial film guess (parabolic geometry + texture, no deflection yet)
-    h = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
-
-    # Nominal film used for squeeze derivative in first substep
-    h_nom_prev = h.copy()
-
-    # Initial pressure on core: Hertz-type ND seed, scaled by ph
-    P0 = np.sqrt(np.maximum(1.0 - s**2, 0.0))
-    p_core = ph * P0  # dimensional pressure at core nodes
-
-    # Helper: embed core pressure p_core(s) → p(x) on extended window (zero outside |X|<=1)
-    def embed_p(p_core_vec):
-        p_full = np.zeros_like(x)
-        inside = (X >= -1.0) & (X <= +1.0)
-        if inside.any():
-            p_vals = np.interp(x[inside], xs, np.maximum(p_core_vec, 0.0))
-            p_full[inside] = p_vals
-        return p_full
-
-    # Substep control (for advection CFL)
+    # ---------------- Time-step splitting for advection ----------------
     u1_local = abs(Ve)
     cfl  = u1_local * dt / (dx + 1e-30)
     base_needed = int(max(2, np.ceil(cfl / CFL_TARGET)))
@@ -380,199 +376,234 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     total_substeps = max(total_substeps, 2)
     dts  = dt / float(total_substeps)
 
-    # Previous pressure for dp/dt and film-fraction (Elrod–Adams)
-    p_prev = embed_p(p_core).copy()
-    theta  = np.ones_like(x)  # film fraction θ (1=full film, 0=cavitated)
+    # Helper: embed core **dimensional** pressure p_core(s) → p(x) on extended window
+    def embed_p(p_core_vec):
+        p_full = np.zeros_like(x)
+        inside = (X >= -1.0) & (X <= +1.0)
+        if inside.any():
+            p_vals = np.interp(x[inside], xs, np.maximum(p_core_vec, 0.0))
+            p_full[inside] = p_vals
+        return p_full
 
-    # ------------- Substep loop (inner Reynolds + cavitation) -------------
-    for _sub in range(total_substeps):
+    # ---------------- Initial guess for undeformed gap h0 ----------------
+    # Classic mixed-lubrication approach: start from a few composite σ, then
+    # update by load balance (Chong et al. eq. 39 style).
+    h0 = max(2*sigma_combined, 5e-8)
+    h0_max = 5.0e-6                # upper safety bound (50 µm)
 
-        # Current embedded pressure & elastic deflection
-        p_embed = embed_p(p_core)
-        defl_sub = elastic_deflection(x, p_embed)
+    # Placeholders to hold final (converged) fields
+    p_final = np.zeros_like(x)
+    h_final = np.full_like(x, h0)
+    p_asp_final = np.zeros_like(x)
+    Wa_final = 0.0
+    Wh_final = 0.0
 
-        # Nominal film for Reynolds / rheology (geometry + deflection + texture)
-        # NOTE: no rigid approach here; this keeps the PDE well-posed.
-        h_nom = np.maximum(h0 + x**2 / (2.0 * R) + defl_sub + htex, h_floor)
-        dhdt  = (h_nom - h_nom_prev) / max(dts, 1e-12)
-        h_nom_prev = h_nom.copy()
+    # ============================================================
+    # OUTER LOOP: adjust h0 so that (Wa + Wh) ≈ W_target
+    # ============================================================
+    for it_h0 in range(MAX_H0_ITERS):
 
-        # --- Rheology & density ---
-        eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h_nom, a)
-        rho_dim = rho_dowson_higginson(p_embed, dT_field)
-        drdp    = drho_dp_numeric(p_embed, dT_field, Ve, h_nom, a)
-        phi_x   = phi_x_func(h_nom)
+        # --- Seed film for this h0 (geometry + texture, no deflection yet) ---
+        h = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
+        h_nom_prev = h.copy()
 
-        # --- Effective viscosity for mobility (Carreau) ---
-        dpdx     = np.gradient(p_embed, x)
-        gdot_p   = np.abs(0.5 * np.maximum(h_nom, 1e-12) * np.abs(dpdx) / (eta_dim + 1e-30))
-        gdot_eff = np.sqrt(
-            (np.maximum(np.abs(Vs), 1e-6) / np.maximum(h_nom, 1e-12))**2
-            + gdot_p**2
-        )
-        gdot_eff = np.minimum(gdot_eff, gdot_max)  # clamp shear rate
-        eta_eff_Re = eta_carreau(eta_dim, h_nom, gdot_eff)
+        # --- Initial core pressure: Hertz-like seed (non-dimensional then scaled) ---
+        P0 = np.sqrt(np.maximum(1.0 - s**2, 0.0))
+        p_core = ph * P0.copy()     # dimensional pressure at core nodes
 
-        # --- Mass-conserving cavitation (Elrod–Adams) ---
-        theta = _clamp01(theta)
-
-        # Mobility D for ND operator (in terms of X = x/a, P = p/ph)
-        # We keep exactly your original scaling to preserve magnitudes:
-        # ∂X(D_full ∂X P) ≈ RHS_full, with P = p/ph.
-        D_full = (
-            phi_x * (h_nom**3) * rho_dim * ph * theta
-            / (12.0 * eta_eff_Re * (a**2) + 1e-30)
-        )
-        D_full = np.clip(D_full, 0.0, D_cap)
-
-        # Advected mass is ρ h θ
-        q = rho_dim * np.maximum(h_nom, 1e-12) * theta
-        u = Ve
-
-        # Inflow states (full film at bulk density) for Rusanov
-        h_nom_seed = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
-        h_left, h_right = h_nom_seed[0], h_nom_seed[-1]
-        if u >= 0.0:
-            q_in_left  = PHI_IN * rho0 * h_left * 1.0  # θ=1 at inlet
-            q_in_right = q[-1]
-        else:
-            q_in_left  = q[0]
-            q_in_right = PHI_IN * rho0 * h_right * 1.0
-
-        # Conservative advection of mass ρ h θ (Rusanov divergence)
-        term_adv = rusanov_div_bc(u, q, dx, q_in_left, q_in_right)
-
-        # Compressible squeeze with θ:
-        # ∂t(ρ h θ) = ρ θ ∂t h + h θ ∂ρ/∂p ∂t p
-        dpdt_embed   = (p_embed - p_prev) / max(dts, 1e-12)
-        term_squeeze = (rho_dim * theta * dhdt + h_nom * theta * drdp * dpdt_embed)
-
-        # ⚠ SIGN: we keep your original convention here, because rusanov_div_bc
-        # already encodes the divergence direction. Changing sign there gave
-        # you massive pressure spikes.
-        RHS_full = term_adv + term_squeeze
-
-        # Map to core (|X|<=1) and assemble diffusion operator on s-grid
-        D_core   = np.interp(xs, x, D_full)
-        RHS_core = np.interp(xs, x, RHS_full)
-
-        M = len(xs)
-        A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
-        invdS2 = 1.0 / (dS * dS + 1e-30)
-
-        # Boundary: P = 0 at X = ±1 (i.e. p = 0 there)
-        B[0] = 1.0; RHS[0] = 0.0
-        for j in range(1, M - 1):
-            Dw = 0.5 * (D_core[j] + D_core[j - 1])
-            De = 0.5 * (D_core[j] + D_core[j + 1])
-            A[j] = -Dw * invdS2
-            C[j] = -De * invdS2
-            B[j] = -(A[j] + C[j]) + 1e-12
-            RHS[j] = RHS_core[j]
-        B[M - 1] = 1.0; RHS[M - 1] = 0.0
-
-        # Thomas solve on core for P_new (non-dimensional)
-        # We solve A * (P_new) = RHS in ND form, then convert to dimensional p_core.
-        for j in range(1, M):
-            wfac = A[j] / (B[j - 1] + 1e-30)
-            B[j]   -= wfac * C[j - 1]
-            RHS[j] -= wfac * RHS[j - 1]
-        P_new = np.zeros(M)
-        P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
-        for j in range(M - 2, -1, -1):
-            P_new[j] = (RHS[j] - C[j] * P_new[j + 1]) / (B[j] + 1e-30)
-
-        # Non-negative pressure (Elrod–Adams)
-        P_new = np.maximum(P_new, 0.0)
-        p_tmp = embed_p(P_new * ph)  # dimensional p(x)
-
-        # ---- Elrod–Adams complementarity: θ update ----
-        full_mask = (p_tmp > 0.0)
-        cav_mask  = ~full_mask
-
-        theta[full_mask] = 1.0
-
-        # In cavitated zones (p=0): ∂t(ρ h θ) + ∂x(u ρ h θ) = 0
-        den_cav = (rho_dim[cav_mask] * np.maximum(h_nom[cav_mask], 1e-12) + 1e-30)
-        theta[cav_mask] = _clamp01(
-            theta[cav_mask]
-            - dts * (
-                term_adv[cav_mask] / den_cav
-                + theta[cav_mask] * (rho_dim[cav_mask] * dhdt[cav_mask]) / den_cav
-            )
-        )
-
-        # ---- Gentle hydrodynamic load relaxation (amplitude only) ----
-        # Use Greenwood–Tripp on *current h_nom* for asperity load; then adjust
-        # hydrodynamic pressure amplitude so (Wa + Wh) ≈ W without distorting shape.
-        p_asp_sub = asperity_pressure_greenwood_tripp(np.maximum(h_nom, h_floor))
-        Wa_sub = np.trapezoid(p_asp_sub, x) * L
-        Wh_sub = np.trapezoid(p_tmp, x) * L
-        total_load = Wa_sub + Wh_sub
-
-        if total_load > 1e-18:
-            # Target hydrodynamic load given asperity load
-            Wh_target = max(W - Wa_sub, 0.0)
-            if Wh_sub > 1e-18:
-                s_relax_raw = Wh_target / (Wh_sub + 1e-30)
-                # Limit how much we scale in one go to avoid explosions
-                s_relax = np.clip(s_relax_raw, 0.25, 4.0)
-                P_new *= s_relax
-                p_tmp = embed_p(P_new * ph)
-
-        # ---- Relaxation of the ND pressure on core ----
-        P_old = p_core / ph  # previous ND pressure
-        P_core_relaxed = (1.0 - relax_p) * P_old + relax_p * P_new
-        # mild smoothing
-        Ptmp = P_core_relaxed.copy()
-        if len(P_core_relaxed) >= 3:
-            P_core_relaxed[1:-1] = (
-                0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
-            )
-        P_core_relaxed[0]  = 0.0
-        P_core_relaxed[-1] = 0.0
-
-        p_core = P_core_relaxed * ph
+        # --- Initial embedded pressure, film fraction ---
         p_prev = embed_p(p_core).copy()
+        theta  = np.ones_like(x)    # film fraction θ (1=full film, 0=cavitated)
 
-        # ---- Update film with elasticity at the *current* pressure ----
-        defl  = elastic_deflection(x, p_prev)
-        h_candidate = np.maximum(h0 + x**2 / (2.0 * R) + defl + htex, h_floor)
-        h = np.maximum(relax_h * h + (1.0 - relax_h) * h_candidate, h_floor)
+        # ========================================================
+        # INNER LOOP: Reynolds–Elrod solver for given h0
+        # ========================================================
+        for _sub in range(total_substeps):
 
-    # ---------------- Final fields on extended window ----------------
-    p = embed_p(p_core)
-    defl_final = elastic_deflection(x, p)
-    h = np.maximum(h0 + x**2 / (2.0 * R) + defl_final + htex, h_floor)
+            # Current embedded pressure & elastic deflection
+            p_embed = embed_p(p_core)
+            defl_sub = elastic_deflection(x, p_embed)
 
-    # Mixed load split: Greenwood–Tripp asperity + hydrodynamic (no extra scaling)
-    p_asp_final = asperity_pressure_greenwood_tripp(h)
-    Wa_final = np.trapezoid(p_asp_final, x) * L
-    Wh_now = np.trapezoid(p, x) * L
-    W_total_final = Wa_final + Wh_now  # for diagnostics if you want to print/log
+            # Nominal film for Reynolds / rheology (geometry + deflection + texture)
+            h_nom = np.maximum(h0 + x**2 / (2.0 * R) + defl_sub + htex, h_floor)
+            dhdt  = (h_nom - h_nom_prev) / max(dts, 1e-12)
+            h_nom_prev = h_nom.copy()
 
-    # Friction (hydrodynamic + boundary)
-    eta_w, _dT_f = eta_houpert(p, TEMP_C, Ve, h, a)
-    dpdx   = np.gradient(p, x)
-    gdot_wall = np.maximum(np.abs(Vs) / np.maximum(h, 1e-12), 1e-6)
+            # --- Rheology & density ---
+            eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h_nom, a)
+            rho_dim = rho_dowson_higginson(p_embed, dT_field)
+            drdp    = drho_dp_numeric(p_embed, dT_field, Ve, h_nom, a)
+            phi_x   = phi_x_func(h_nom)
+
+            # --- Effective viscosity for mobility (Carreau) ---
+            dpdx     = np.gradient(p_embed, x)
+            gdot_p   = np.abs(0.5 * np.maximum(h_nom, 1e-12) * np.abs(dpdx) / (eta_dim + 1e-30))
+            gdot_eff = np.sqrt(
+                (np.maximum(np.abs(Vs), 1e-6) / np.maximum(h_nom, 1e-12))**2
+                + gdot_p**2
+            )
+            gdot_eff = np.minimum(gdot_eff, gdot_max)  # clamp shear rate
+            eta_eff_Re = eta_carreau(eta_dim, h_nom, gdot_eff)
+
+            # --- Mass-conserving cavitation (Elrod–Adams) ---
+            theta = _clamp01(theta)
+
+            # Mobility D only where θ>0 (filled film); Poiseuille part is shut off with θ
+            D_full = (phi_x * (h_nom**3) * rho_dim * ph * theta) / (
+                12.0 * eta_eff_Re * (a**2) + 1e-30
+            )
+            D_full = np.minimum(D_full, D_cap)
+
+            # Advected mass is ρ h θ
+            q = rho_dim * np.maximum(h_nom, 1e-12) * theta
+            u = Ve
+
+            # Inflow states (full film at bulk density) for upwind Rusanov
+            h_nom_seed = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
+            h_left, h_right = h_nom_seed[0], h_nom_seed[-1]
+            if u >= 0.0:
+                q_in_left  = PHI_IN * rho0 * h_left * 1.0  # θ=1 at inlet
+                q_in_right = q[-1]
+            else:
+                q_in_left  = q[0]
+                q_in_right = PHI_IN * rho0 * h_right * 1.0
+
+            # Conservative advection of mass ρ h θ (Rusanov divergence)
+            term_adv = rusanov_div_bc(u, q, dx, q_in_left, q_in_right)
+
+            # Compressible squeeze with θ:
+            # ∂t(ρ h θ) = ρ θ ∂t h + h θ ∂ρ/∂p ∂t p
+            dpdt_embed   = (p_embed - p_prev) / max(dts, 1e-12)
+            term_squeeze = (rho_dim * theta * dhdt + h_nom * theta * drdp * dpdt_embed)
+
+            # RHS of diffusion operator (sign kept consistent with rusanov_div_bc)
+            RHS_full = term_adv + term_squeeze
+
+            # Map to core (|X|<=1) and assemble diffusion operator on s-grid
+            D_core   = np.interp(xs, x, D_full)
+            RHS_core = np.interp(xs, x, RHS_full)
+
+            M = len(xs)
+            A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
+            invdS2 = 1.0 / (dS * dS + 1e-30)
+
+            # Boundary: P = 0 at X = ±1 (i.e. p = 0 there)
+            B[0] = 1.0; RHS[0] = 0.0
+            for j in range(1, M - 1):
+                Dw = 0.5 * (D_core[j] + D_core[j - 1])
+                De = 0.5 * (D_core[j] + D_core[j + 1])
+                A[j] = -Dw * invdS2
+                C[j] = -De * invdS2
+                B[j] = -(A[j] + C[j]) + 1e-12
+                RHS[j] = RHS_core[j]
+            B[M - 1] = 1.0; RHS[M - 1] = 0.0
+
+            # Thomas solve on core for P_new (non-dimensional)
+            for j in range(1, M):
+                wfac = A[j] / (B[j - 1] + 1e-30)
+                B[j]   -= wfac * C[j - 1]
+                RHS[j] -= wfac * RHS[j - 1]
+            P_new = np.zeros(M)
+            P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
+            for j in range(M - 2, -1, -1):
+                P_new[j] = (RHS[j] - C[j] * P_new[j + 1]) / (B[j] + 1e-30)
+
+            # Non-negative pressure (Elrod–Adams)
+            P_new = np.maximum(P_new, 0.0)
+            p_tmp = embed_p(P_new * ph)  # dimensional p(x)
+
+            # ---- Elrod–Adams complementarity: θ update ----
+            full_mask = (p_tmp > 0.0)
+            cav_mask  = ~full_mask
+
+            theta[full_mask] = 1.0
+
+            # In cavitated zones (p=0): ∂t(ρ h θ) + ∂x(u ρ h θ) = 0
+            den_cav = (rho_dim[cav_mask] * np.maximum(h_nom[cav_mask], 1e-12) + 1e-30)
+            theta[cav_mask] = _clamp01(
+                theta[cav_mask]
+                - dts * (
+                    term_adv[cav_mask] / den_cav
+                    + theta[cav_mask] * (rho_dim[cav_mask] * dhdt[cav_mask]) / den_cav
+                )
+            )
+
+            # ---- Pressure relaxation and smoothing (no load scaling here) ----
+            P_old = p_core / ph           # previous ND pressure
+            P_core_relaxed = (1.0 - relax_p) * P_old + relax_p * P_new
+            Ptmp = P_core_relaxed.copy()
+            if len(P_core_relaxed) >= 3:
+                P_core_relaxed[1:-1] = (
+                    0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
+                )
+            P_core_relaxed[0]  = 0.0
+            P_core_relaxed[-1] = 0.0
+
+            p_core = P_core_relaxed * ph
+            p_prev = embed_p(p_core).copy()
+
+            # ---- Update film with elasticity at the *current* pressure ----
+            defl  = elastic_deflection(x, p_prev)
+            h_candidate = np.maximum(h0 + x**2 / (2.0 * R) + defl + htex, h_floor)
+            h = np.maximum(relax_h * h + (1.0 - relax_h) * h_candidate, h_floor)
+
+        # ============ end of inner Reynolds loop for this h0 ============
+
+        # Final fields for this h0 on extended window
+        p = embed_p(p_core)
+        defl_final = elastic_deflection(x, p)
+        h = np.maximum(h0 + x**2 / (2.0 * R) + defl_final + htex, h_floor)
+
+        # Mixed load split: Greenwood–Tripp asperity + hydrodynamic
+        p_asp = asperity_pressure_greenwood_tripp(h)
+        Wa = np.trapezoid(p_asp, x) * L
+        Wh = np.trapezoid(p, x) * L
+        W_num = Wa + Wh
+
+        # Save as current best
+        p_final = p.copy()
+        h_final = h.copy()
+        p_asp_final = p_asp.copy()
+        Wa_final = float(Wa)
+        Wh_final = float(Wh)
+
+        # If target load is tiny, or balance is good enough, stop
+        if W_target <= 1e-6:
+            break
+        rel_err = abs(W_num - W_target) / (abs(W_target) + 1e-30)
+        if rel_err < LOAD_TOL:
+            break
+
+        # ---- h0 update by load balance (Chong eq. 39 style) ----
+        # If W_num > W_target → contact carrying too much load → increase h0.
+        # If W_num < W_target → contact too soft → decrease h0.
+        factor = (W_num / (W_target + 1e-30))**XI_H0
+        h0 = np.clip(h0 * factor, h_floor, h0_max)
+
+    # ============================================================
+    # Friction (hydrodynamic + boundary) based on converged fields
+    # ============================================================
+    eta_w, _dT_f = eta_houpert(p_final, TEMP_C, Ve, h_final, a)
+    dpdx   = np.gradient(p_final, x)
+    gdot_wall = np.maximum(np.abs(Vs) / np.maximum(h_final, 1e-12), 1e-6)
     gdot_wall = np.minimum(gdot_wall, gdot_max)
-    eta_w_sh  = eta_carreau(eta_w, h, gdot_wall)
+    eta_w_sh  = eta_carreau(eta_w, h_final, gdot_wall)
 
-    tau_c  = np.where(h > 1e-12, eta_w_sh * Vs / h, 0.0)
-    tau_p  = 0.5 * h * dpdx
+    tau_c  = np.where(h_final > 1e-12, eta_w_sh * Vs / h_final, 0.0)
+    tau_p  = 0.5 * h_final * dpdx
     tau_tot = tau_c + tau_p
 
-    tau_lim = gamma_lim * np.maximum(p, 0.0)
+    tau_lim = gamma_lim * np.maximum(p_final, 0.0)
     tau_eff = np.clip(tau_tot, -tau_lim, tau_lim)
 
     Fh = np.trapezoid(tau_eff, x) * L
     Fb = L * np.trapezoid(mu_b * p_asp_final, x)
 
     return {
-        "x": x, "X": X, "p": p, "h": h,
+        "x": x, "X": X, "p": p_final, "h": h_final,
         "Fh": float(Fh), "Fb": float(Fb),
         "Wa": float(Wa_final), "a": float(a),
-        "pmax": float(np.max(p)),
+        "pmax": float(np.max(p_final)),
         "p_asp_x": p_asp_final
     }
 
@@ -610,14 +641,14 @@ PLOT_OPTS = {
     },
     "SWEEPS": {
         "Fh": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": None,
             "rpms": [300],
             "surface_state": 0,
             "texture_densities": [8],
         },
         "Fb": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": None,
             "rpms": [300],
             "surface_state": 0,
