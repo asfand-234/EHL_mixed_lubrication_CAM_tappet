@@ -1,21 +1,19 @@
-Read Python code in text file "ehl_python.txt" which is related to 1D Mixed lubrication Line contact having compressible reynolds equation solution in CAM and tappet mechanism.
+Read Python code in text file "ehl_python.txt" which is related to average friction torque reduction due to surface textures using 1D Mixed lubrication Line contact having compressible reynolds equation solution in CAM and tappet mechanism.
 And cam lift data "updated_lift.txt"
 
-PROBLEM: The code taking too long time to run and display results of hydrodynamic friction and asperity friction.
+PROBLEM:
+The current code is generating very unrealistic large % averaged friction torque reduction for RPMs 500, 700 and 900 for all texture area densities.
 
-TASK:
-1) Run the entire code for plotting hydrodynamic friction Fh and asperity friction Fb at 300 RPM for untextured case and analyze and noticed the initial computational time.
-2) Find the exact causes/bugs/inconsistencies throughout the code which is yielding greater run rime. And fix them all.
-3) Re-run the entire script and analyze computational time. If reduced at least 4 times lower the previous then acceptable, else re-optimize the script and reduce the run time. 
-
-Keep running entire code and keep analyzing run time and keep optimizing script until at least its reduced 4 times the initial runtime. 
-
-
+TASK
+1) Run the entire code and print % averaged friction torque reduction at 500 RPM for texture area densities 5%, 8% and 10%. And analyze the results. 
+2) If the % average friction torque reduction is unrealistic large figure then deep analyze and find the bugs/causes and fix them all. And again run the entire code and print the results.
+3) If results becomes realistic reduction of friction to reasonabme percentage then print results for 700 and 900 and do the same procedure. If not, then keep analyze the physics and keep optimizing.
+4) Once all cases improved then provide only ready to paste complete script to me. Do not provide results.
+ACCEPTANCE CRITERIA:
+1) % reduction should be positive not negative. Which indicates decrease in friction due to textures. 
+2) % reduction must be reasonable i.e less then 15% 
 
 HARD STRICT RULES:
-1) Do not change the "KINEMATICS"  formulas in script.
-2) Do not oversimplify any physics.
-3) Do not add any non-physical or non-logical clipping, conditions or boundness.
-4) Make sure the results/resolution/accracy of physics do not get disturbed.
-ACCEPTANCE CRITERIA:
-You must run the entire code everytime once achieved  reduced runtime then only generate update complete script ready to paste for me without missing any line. Do not provide any results.
+1) Do not change "KINEMATICS" formulas
+2) Do not change fixed texture parameters values.
+3) Do not change fixed geometry/material values. Rather focus on physics and inconsistencies.
