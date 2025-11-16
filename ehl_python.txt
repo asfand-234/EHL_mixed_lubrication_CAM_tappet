@@ -102,6 +102,111 @@ _lam_grid = np.linspace(0.0, 6.0, 360)
 _kern = _gt_w_pow[None, :] * np.exp(-0.5 * (_lam_grid[:, None] + _gt_w) ** 2)
 _F32_lookup = np.trapezoid(_kern, _gt_w, axis=1) / _gt_norm
 _F32_lookup[-1] = 0.0
+def asperity_pressure_zhao_masjedi(
+    h,
+    x,
+    W_total,
+    Ve,
+    R,
+    sigma=sigma_combined,
+    hardness_GPa=7.0,
+):
+
+    # ------------ basic shape checks ------------
+    h = np.asarray(h, dtype=float)
+    x = np.asarray(x, dtype=float)
+    if h.shape != x.shape:
+        raise ValueError("asperity_pressure_zhao_masjedi: h and x must have same shape")
+    if h.size < 2:
+        return np.zeros_like(h)
+
+    # ------------ material / roughness data ------------
+    r = float(sigma)                     # RMS roughness [m]
+    hd = float(hardness_GPa) * 1e9       # hardness [Pa]
+
+    # Effective line load (per unit width)
+    W_total = float(max(W_total, 0.0))
+    if W_total <= 0.0:
+        return np.zeros_like(h)
+
+    # ------------ dimensionless groups (Masjedi 2012) ------------
+    # W̄, Ū, Ḡ, r̂, V̄
+    R_eff = float(max(R, 1e-12))
+    w_line = W_total / max(L, 1e-30)          # [N/m]
+
+    W_dim = w_line / (E_star * R_eff + 1e-30)          # W̄
+    U_dim = eta0 * abs(Ve) / (E_star * R_eff + 1e-30)  # Ū
+    G_dim = alpha0 * E_star                            # Ḡ
+    r_hat = r / (R_eff + 1e-30)                        # r̂
+    V_dim = hd / (E_star + 1e-30)                      # V̄
+
+    # clamp to avoid underflow / overflow in powers and logs
+    W_cl   = max(W_dim, 1e-12)
+    U_cl   = max(U_dim, 1e-12)
+    G_cl   = max(G_dim, 1e-12)
+    rhat_cl = max(r_hat, 1e-12)
+    V_cl   = max(V_dim, 1e-12)
+
+    # ------------ Masjedi asperity load ratio L_a (curve-fit to Zhao model) ------------
+    # Functional form from Masjedi & Khonsari (2012, asperity-load formula):
+    #   L_a = C * W̄^a * Ū^b * Ḡ^c *
+    #         ln[ 1 + K * r̂^{m} * V̄^{n} * W̄^{p} * Ū^{q} * Ḡ^{s} ]
+    #
+    # Coefficients (C, a, b, c, K, m, n, p, q, s) taken from the published fit.
+    # (These numbers are specific to *line contacts* and Gaussian roughness.)
+    C  = 5.0e-3
+    a  = -0.408
+    b  = -0.088
+    c  =  0.103
+    K  = 4.47e3
+    m  =  6.015
+    n  =  1.168
+    p  =  0.485
+    q  = -3.741
+    s  = -2.898
+
+
+    # numeric safety: enforce >1 before log
+    inner = 1.0 + K * (rhat_cl**m) * (V_cl**n) * (W_cl**p) * (U_cl**q) * (G_cl**s)
+    if inner <= 1.0:
+        La_frac = 0.0
+    else:
+    # La from Eq. (21) is in **percent**
+        La_percent = C * (W_cl**a) * (U_cl**b) * (G_cl**c) * np.log(inner)
+        La_percent = max(La_percent, 0.0)
+    # convert percent → fraction of total load
+        La_frac = La_percent / 100.0
+
+# optional: avoid unphysical >70% asperity load (Masjedi advises caution there)
+    La_frac = min(La_frac, 0.7)
+
+    Wa_target = La_frac * W_total
+
+    if Wa_target <= 0.0:
+        return np.zeros_like(h)
+
+    # ------------ spatial distribution via Greenwood–Tripp ------------
+    # use your existing F_{3/2}(λ) lookup: _lam_grid, _F32_lookup
+    lam = np.maximum(h / (r + 1e-30), 0.0)
+    lam_clipped = np.clip(lam, _lam_grid[0], _lam_grid[-1])
+
+    F32 = np.interp(lam_clipped, _lam_grid, _F32_lookup)
+    F32 = np.maximum(F32, 0.0)
+
+    if not np.any(F32 > 0.0):
+        return np.zeros_like(h)
+
+    # scale F32 so that ∫ p_asp dx * L = Wa_target
+    denom = np.trapezoid(F32, x) * L
+    if denom <= 1e-30:
+        return np.zeros_like(h)
+
+    scale = Wa_target / denom        # [Pa], because Wa = ∫(scale*F32)dx * L
+    p_asp_x = scale * F32
+
+    # numeric safety: no negative pressures due to roundoff
+    p_asp_x = np.maximum(p_asp_x, 0.0)
+    return p_asp_x
 
 # ============================================================
 # Houpert viscosity + DH density + ΔT model
@@ -132,7 +237,8 @@ def deltaT_karthikeyan(u_av, h, p, a, eta_abs, k_l, gamma_c, T_c):
     return np.clip(dT, -40.0, 180.0)
 
 def eta_houpert(p, T0_c, Ve_local, h_local, a_local):
-    Z, S0, lneta0_plus = _houpert_params(eta0, T0_c, alpha0, BETA0_CONST)
+    Z, S0, lneta0_plus = _houpert_param
+    s(eta0, T0_c, alpha0, BETA0_CONST)
     # First pass at T0_c
     alpha_s = _alpha_star(p, T0_c, eta0, T0_c, Z, S0, lneta0_plus)
     eta_init = np.maximum(eta0 * np.exp(np.clip(alpha_s*np.maximum(p,0.0), -50.0, 50.0)), 1e-7)
@@ -168,15 +274,7 @@ def eta_carreau(etaN,h,gdot):
     gdot_eff = np.maximum(gdot, 1e-6)
     return np.maximum(eta_inf + (etaN-eta_inf)*(1.0 + (lam_c*gdot_eff)**2.0)**((n_c-1.0)/2.0), 1e-7)
 
-# ============================================================
-# Asperity pressure (Greenwood–Tripp)
-# ============================================================
-def asperity_pressure_greenwood_tripp(h):
-    lam = np.maximum(np.asarray(h, float)/(sigma_combined + 1e-18), 0.0)
-    lam_clipped = np.clip(lam, _lam_grid[0], _lam_grid[-1])
-    F32 = np.interp(lam_clipped, _lam_grid, _F32_lookup)
-    pref = (4.739075) * E_star * np.sqrt(sigma_combined/beta_a) * (beta_a *eta_R * sigma_combined)**2
-    return (pref * F32).reshape(lam.shape)
+
 
 # ============================================================
 # Film seed (Hamrock–Dowson, line-contact 
@@ -188,7 +286,7 @@ def central_film_thickness(R, W, Ve):
     G = alpha0 * E_star
     W_star = W / (E_star * L * R + 1e-30)
     hc = 3.06 * (U**0.69) * (G**0.56) * (W_star**-0.1) * R
-    return float(np.clip(hc, 5e-9, 600e-8))
+    return float(np.clip(hc, 5e-9, 600e-9))
 
 # ============================================================
 # KINEMATICS (lift smoothing, curvature, speeds, load)
@@ -338,12 +436,6 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     h0   = central_film_thickness(R, W, Ve)     # Hamrock–Dowson central film
     htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
 
-    # Zero-mean the texture within the loaded region |x| <= a, then cap positive peaks
-    if atex_theta > 0.0:
-        mask_loaded = (x >= -a) & (x <= a)
-        mean_htex = np.mean(htex[mask_loaded]) if np.any(mask_loaded) else 0.0
-        htex = htex - mean_htex
-        htex = np.minimum(htex, 3.0 * h0)
 
     # Initial film guess (parabolic geometry + texture, no deflection yet)
     h = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
@@ -505,7 +597,10 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         # ---- Gentle hydrodynamic load relaxation (amplitude only) ----
         # Use Greenwood–Tripp on *current h_nom* for asperity load; then adjust
         # hydrodynamic pressure amplitude so (Wa + Wh) ≈ W without distorting shape.
-        p_asp_sub = asperity_pressure_greenwood_tripp(np.maximum(h_nom, h_floor))
+        p_asp_sub = asperity_pressure_zhao_masjedi(
+        np.maximum(h_nom, h_floor), x, W, Ve, R
+        )
+
         Wa_sub = np.trapezoid(p_asp_sub, x) * L
         Wh_sub = np.trapezoid(p_tmp, x) * L
         total_load = Wa_sub + Wh_sub
@@ -545,9 +640,19 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     defl_final = elastic_deflection(x, p)
     h = np.maximum(h0 + x**2 / (2.0 * R) + defl_final + htex, h_floor)
 
-    # Mixed load split: Greenwood–Tripp asperity + hydrodynamic (no extra scaling)
-    p_asp_final = asperity_pressure_greenwood_tripp(h)
+
+# Mixed load split: Zhao/Masjedi asperity + hydrodynamic (no extra scaling)
+    p_asp_final = asperity_pressure_zhao_masjedi(
+    h,          # local film
+    x,          # grid
+    W,          # total normal load for this cam angle
+    Ve,         # entrainment speed at this angle
+    R,          # effective radius at this angle
+    sigma=sigma_combined,     # combined roughness
+    hardness_GPa=7.0          # case-hardened 16MnCr5 / 100Cr6
+   )
     Wa_final = np.trapezoid(p_asp_final, x) * L
+
     Wh_now = np.trapezoid(p, x) * L
     W_total_final = Wa_final + Wh_now  # for diagnostics if you want to print/log
 
@@ -585,23 +690,23 @@ def _as_list(v):
 PLOT_OPTS = {
     "PROFILES": {
         "PRESSURE": {
-            "ENABLE": True,
-            "angles_deg": [10],
+            "ENABLE": False,
+            "angles_deg": [50],
             "rpms": [300],
             "surface_state": 0,         # 0 = UNTEXTURED, 1 = TEXTURED
             "texture_densities": [8],
         },
         "FILM": {
-            "ENABLE": True,
-            "angles_deg": [10],
+            "ENABLE": False,
+            "angles_deg": [50],
             "rpms": [300],
             "surface_state": 0,
             "texture_densities": [8],
         },
         # New: asperity pressure vs X = x/a (same controls as Reynolds pressure)
         "ASPERITY": {
-            "ENABLE": True,
-            "angles_deg": [10],
+            "ENABLE": False,
+            "angles_deg": [50],
             "rpms": [300],
             "surface_state": 0,         # 0 = UNTEXTURED, 1 = TEXTURED
             "texture_densities": [8],
@@ -610,14 +715,14 @@ PLOT_OPTS = {
     },
     "SWEEPS": {
         "Fh": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": None,
             "rpms": [300],
             "surface_state": 0,
             "texture_densities": [8],
         },
         "Fb": {
-            "ENABLE": True,
+            "ENABLE": False,
             "angles_deg": None,
             "rpms": [300],
             "surface_state": 0,
@@ -645,11 +750,8 @@ PLOT_OPTS = {
         "surface_state": 0,
         "texture_densities": [8],
     },
-    "AVG_TORQUE_REDUCTION": {
-        "ENABLE": False,
-        "rpms": [300],
-        "densities_vs_UN": [5],
-    },
+    "AVG_TORQUE_REDUCTION": {"ENABLE": True, "rpms": [300, 500,700,900], "densities_vs_UN": [5,8,10],},
+    
     "HTEX_300RPM": {
         "ENABLE": False,
         "texture_densities": [5, 8, 10],
@@ -658,7 +760,7 @@ PLOT_OPTS = {
     # ---------------- Single-variable vs angle (Ve, Vs, W, R, a_hertz, ph, hc) ----------------
     "VARIABLE_BY_ANGLE": {
         "ENABLE": False,                 # set True to plot
-        "variable": "Ve",               # one of: "Ve","Vs","W","R","a_hertz","ph","hc"
+        "variable": "hc",               # one of: "Ve","Vs","W","R","a_hertz","ph","hc"
         "rpms": [300],                  # single RPM or list
         "style": {"lw": 2.0, "grid_alpha": 0.35, "dpi": 120},
     },
