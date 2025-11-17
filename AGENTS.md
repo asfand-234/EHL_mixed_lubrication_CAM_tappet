@@ -16,6 +16,7 @@ IMPLEMENTATION STRATEGY:
 
 3) There is no limit of range of E_eff value it can be of any type. But every case will must have its own E_eff value. So at the end there would be total 12 best suitable E_eff values for each case. 
 4) At the end just provide all 12 values of E_eff to me. No need to provide any other thing.
-
+TESTING CRITERIA:
+After each tuned value of E_eff, run the script and analyze the % averaged friction torque reduction. If does not meet at least 85% same as above target value then keep tune E_eff. Once all suitable values of E_eff identified then run the script to final confirm wether all the choose E_eff values are giving 85% same target results of each case or not. If not, then keep tuning
 HARD STRICT RULES:
 1) DO NOT make any changes in the code for calibration. Do Not change any parameter value. Only calibrate E_eff value for each case.
