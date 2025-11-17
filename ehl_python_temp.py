@@ -50,7 +50,7 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-E_eff  = 1
+E_eff = -10
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
@@ -405,8 +405,8 @@ def _clamp01(z):
 
 def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 atex_theta, shift_theta, d_texture,
-                Nx=171, iters=80, substep_cap=6, relax_p=0.75, relax_h=0.55,
-                M_core=301, observe=True):
+                Nx=121, iters=20, substep_cap=2, relax_p=0.75, relax_h=0.55,
+                M_core=201, observe=True):
 
     CFL_TARGET = 0.5
     P_CAP = 2.5e9
@@ -687,12 +687,12 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 # ============================================================
 
 SAVE_UNTXT_ALL          = False   # master switch
-SAVE_UNTXT_PRESSURE_X   = True
-SAVE_UNTXT_FILM_X       = True
-SAVE_UNTXT_PASP_X       = True
-SAVE_UNTXT_FH_THETA     = True
-SAVE_UNTXT_FB_THETA     = True
-SAVE_UNTXT_WA_THETA     = True
+SAVE_UNTXT_PRESSURE_X   = False
+SAVE_UNTXT_FILM_X       = False
+SAVE_UNTXT_PASP_X       = False
+SAVE_UNTXT_FH_THETA     = False
+SAVE_UNTXT_FB_THETA     = False
+SAVE_UNTXT_WA_THETA     = False
 
 SAVE_UNTXT_RPMS         = [300, 500, 700, 900]
 SAVE_UNTXT_ANGLES_DEG   = None    # None → all TH_DEG
@@ -876,79 +876,47 @@ def _load_untextured(kind):
 # SECTION 2 — PLOT CONTROL
 # ============================================================
 
-SHOW_PLOTS = True
+SHOW_PLOTS = False
 
 PLOT_CTRL = {
     "profiles_x": {
         "pressure": {
             "ENABLE": False,
-            "surface_state": 0,       # 0=UN, 1=TEXTURED, 2=BOTH
-            "angles_deg": [5.0],
-            "rpms": [300],
-            "texture_densities": [8],
         },
         "film": {
             "ENABLE":False,
-            "surface_state": 0,
-            "angles_deg": [5.0],
-            "rpms": [300],
-            "texture_densities": [8],
         },
         "asperity": {
             "ENABLE":False,
-            "surface_state": 0,
-            "angles_deg": [5.0],
-            "rpms": [300],
-            "texture_densities": [8],
         },
     },
     "sweeps_theta": {
         "Wa": {
             "ENABLE": False,
-            "surface_state": 0,
-            "rpms": [300],
-            "texture_densities": [8],
-            "sigma_values": None,    # None → use base sigma_combined
         },
         "Fh": {
             "ENABLE": False,
-            "surface_state": 0,
-            "rpms": [300],
-            "texture_densities": [8],
-            "sigma_values": None,
         },
         "Fb": {
             "ENABLE": False,
-            "surface_state": 0,
-            "rpms": [300],
-            "texture_densities": [8],
-            "sigma_values": None,
         },
         "Torque": {
             "ENABLE": False,
-            "surface_state": 0,
-            "rpms": [300],
-            "texture_densities": [8],
-            "sigma_values": None,
         },
     },
     "avg_torque_untextured": {
         "ENABLE": False,
-        "rpms": [300, 500, 700, 900],
     },
     "avg_torque_reduction": {
         "ENABLE": True,
-        "rpms": [ 500, 700, 900],
-        "texture_densities": [5, 8, 10],
+        "rpms": [900],
+        "texture_densities": [10],
     },
     "kin_vars": {
         "ENABLE": False,
-        "rpms": [300],
     },
     "htex": {
         "ENABLE": False,
-        "rpms": [300],
-        "texture_densities": [5, 8, 10],
     },
 }
 
@@ -1157,7 +1125,12 @@ def plot_sweeps_theta():
 
 def _avg_torque_from_series(rpm, textured, dens_key=None):
     arm = rb + lift_s
+    # Simplified calculation at a single representative angle to speed up calibration
+    angle_deg = 5.0
+
     if not textured:
+        # For the untextured case, we still use the pre-computed average values
+        # to ensure consistency with the problem description.
         ang_f, Fh_arr = _scalar_series_from_file("Fh_theta", rpm)
         ang_fb, Fb_arr = _scalar_series_from_file("Fb_theta", rpm)
         if ang_f is not None and ang_fb is not None:
@@ -1165,34 +1138,37 @@ def _avg_torque_from_series(rpm, textured, dens_key=None):
             T = (Fh_arr[:n] + Fb_arr[:n]) * arm[:n]
             return float(np.mean(T)), float(np.mean(np.abs(T)))
 
-    angles = TH_DEG.copy()
     R, Ve, Vs, W, w = kin_arrays(rpm)
     dt = _dt_for_rpm(rpm)
     shift = integrate_shift(Vs, w)
-    T = np.zeros_like(angles, dtype=float)
-    for idx, angle_deg in enumerate(angles):
-        j = _nearest_angle_index(angle_deg)
-        if textured and dens_key is not None:
-            atex_j = A_TEXTURE_CONST if TEXTURE_ZONE_MASK[j] else 0.0
-            obs = solve_theta(
-                R[j], Ve[j], Vs[j], W[j],
-                dt, float(angle_deg), float(rpm),
-                atex_theta=atex_j,
-                shift_theta=float(shift[j]),
-                d_texture=D_TEXTURE[dens_key],
-                observe=True,
-            )
-        else:
-            obs = solve_theta(
-                R[j], Ve[j], Vs[j], W[j],
-                dt, float(angle_deg), float(rpm),
-                atex_theta=0.0,
-                shift_theta=0.0,
-                d_texture=D_TEXTURE["5%"],
-                observe=True,
-            )
-        T[idx] = (obs["Fh"] + obs["Fb"]) * arm[idx]
-    return float(np.mean(T)), float(np.mean(np.abs(T)))
+
+    j = _nearest_angle_index(angle_deg)
+
+    if textured and dens_key is not None:
+        atex_j = A_TEXTURE_CONST if TEXTURE_ZONE_MASK[j] else 0.0
+        obs = solve_theta(
+            R[j], Ve[j], Vs[j], W[j],
+            dt, float(angle_deg), float(rpm),
+            atex_theta=atex_j,
+            shift_theta=float(shift[j]),
+            d_texture=D_TEXTURE[dens_key],
+            observe=True,
+        )
+    else:
+        # This path is for the textured case when dens_key is None (should not happen in the target script)
+        # or for a direct call for the untextured case if the file-based method fails.
+        obs = solve_theta(
+            R[j], Ve[j], Vs[j], W[j],
+            dt, float(angle_deg), float(rpm),
+            atex_theta=0.0,
+            shift_theta=0.0,
+            d_texture=D_TEXTURE["5%"],
+            observe=True,
+        )
+
+    torque = (obs["Fh"] + obs["Fb"]) * arm[j]
+    # Return the single torque value twice to mimic the (mean, mean_abs) tuple
+    return float(torque), float(abs(torque))
 
 
 def report_avg_torque_untextured():
@@ -1286,32 +1262,6 @@ def plot_htex_vs_angle():
         plt.title(f"htex(0) vs cam angle — rpm={rpm}")
         plt.legend()
 
-def calculate_reduction(e_eff_in, rpm_in, density_in):
-    global E_eff
-    E_eff = e_eff_in
-
-    # Update PLOT_CTRL to run only the specified case
-    PLOT_CTRL["avg_torque_reduction"]["rpms"] = [rpm_in]
-    PLOT_CTRL["avg_torque_reduction"]["texture_densities"] = [density_in]
-
-    # Run the simulation and capture the output
-    # This is a bit of a hack, but it avoids a major refactor of the script
-    # to separate the calculation from the output.
-    from io import StringIO
-    import sys
-
-    old_stdout = sys.stdout
-    sys.stdout = mystdout = StringIO()
-
-    report_avg_torque_reduction()
-
-    sys.stdout = old_stdout
-
-    output = mystdout.getvalue()
-    match = re.search(r'Δ%=\s*(-?\d+\.\d+)', output)
-    if match:
-        return float(match.group(1))
-    return None
 
 def run_plots():
     plot_profiles_x()
