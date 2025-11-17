@@ -19,4 +19,3 @@ IMPLEMENTATION STRATEGY:
 
 HARD STRICT RULES:
 1) DO NOT make any changes in the code for calibration. Do Not change any parameter value. Only calibrate E_eff value for each case.
-2) there are 329 data points in cam lift text file. Try to run and analyze results for angles greater than 250 points for better accuracy.
