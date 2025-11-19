@@ -1,24 +1,20 @@
 Read Python code in text file "ehl_python.txt" which is related to average friction torque reduction due to surface textures using 1D Mixed lubrication Line contact having compressible reynolds equation solution in CAM and tappet mechanism.
 And cam lift data "updated_lift.txt"
 
-NOTE: To complete this task, you have No limit of time. Take time as much you want to meet the below targets.
+PROBLEM: The current code is generating very low (<1%) percentage of average friction torque reduction wuth respect to untextured for all rpms and all texture area densities.
+
 TASK:
-Calibrate/tune "E_eff" value in htex for each case of rpm and 5% texture area density at 90C to meet the following targets % of averaged friction torque reduction with respect to untextured. 
-TARGET RESULTS:
-RPM     5_percent     
-300      3.4%            
-500      6.12%              
-700     4.21%               
-900     18.33%             
+1) Run the entire code for 300 rpm and at 5% texture density and analyze the % averaged friction torque reduction.
+2) Deeply analyze the entire code. Find the exact bugs/inconsistencies due to which the percentage of friction torque reduction is too low. It must be greater than 5% as per experimentally.
+
+3) Fix the issues and re-run the code and verify it it is solved. If not, re optimize the code and re run and re print the % average friction torque reduction
 
 
-IMPLEMENTATION STRATEGY:
-1) For untextured data, keep text files, "untex_Fb_theta.txt" and "untex_Fh_theta.txt" in your path. This will save computational time for calculating % average friction torque reduction.
-2) Run for first case, rpm 300 and texture density 5% and see the % average friction torque reduction. Then calibrate only E_eff and again print the result. If the result meet at least 85% same the target value then record it and move to next case like rpm 500 and texture densuty 5%. If not meet the target value then keep tuning E_eff value and keep printing. 
-3) There is no limit of range of E_eff value it can be of any type. But every case will must have its own E_eff value. So at the end there would be total 4 best suitable E_eff values for each case. 
-4) At the end just provide all 4 values of E_eff to me. No need to provide any other thing.
-   
-TESTING CRITERIA:
-After each tuned value of E_eff, run the script and analyze the % averaged friction torque reduction. If does not meet at least 85% same as above target value then keep tune E_eff. Once all suitable values of E_eff identified then run the script to final confirm wether all the choose E_eff values are giving 85% same target results of each case or not. If not, then keep tuning
+Testing and acceptance criteria:
+Run the entire code each time. Once % of reduction is equal or greater than 5% then generate only updated complete script resdy to paste for me.
+
 HARD STRICT RULES:
-1) DO NOT make any changes in the code for calibration. Do Not change any parameter value. Only calibrate E_eff value for each case.
+1) Do not change "KINEMATICS"  equations in the code.
+2) Do not change parameters values of texture model.
+3) Do not change fixed geometry/material values.
+4) Do not oversimplify any physics.
