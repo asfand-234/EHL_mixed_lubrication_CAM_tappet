@@ -10,8 +10,6 @@ import pandas as pd
 
 plt.rcParams.update({"figure.dpi": 120})
 
-
-
 HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
 DATA_DIR = "/content/cam"   
 CAM_FILE = "updated_lift.txt"
@@ -50,7 +48,7 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-E_eff  = 1
+
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
@@ -109,7 +107,7 @@ def asperity_pressure_zhao_masjedi(
     Ve,
     R,
     sigma=sigma_combined,
-    hardness_GPa=7.0,
+    hardness_GPa=6.5,
 ):
 
     # ------------ basic shape checks ------------
@@ -365,13 +363,13 @@ g_val     = 1e-9        # [m]
 x_start   = 0.0
 X_in, X_out = -3.5, 2.5
 
-D_TEXTURE = {"5%": 700e-6, "8%": 437.5e-6, "10%": 350e-6}
+D_TEXTURE = {"5%": 700e-6, "8%": 430.5e-6, "10%": 350e-6}
 A_TEXTURE_CONST = 4e-6     
 TEXTURE_ZONE_MASK = np.ones_like(TH_DEG, dtype=bool)
 
-def integrate_shift(Vs, w):
+def integrate_shift(Vf, w):
     dtheta = np.gradient(th)
-    integrand = Vs/(w + 1e-30)
+    integrand = Vf/(w + 1e-30)
     shift = np.zeros_like(integrand)
     shift[1:] = np.cumsum(0.5*(integrand[1:] + integrand[:-1])*dtheta[1:])
     return shift
@@ -382,20 +380,146 @@ def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture):
 
     # Periodic pocket centers with pitch d_texture
     u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
-    expo = np.log(g_val / atex_theta) * (4.0 * u**2) / (w_texture**2 + 1e-30)
-    h = E_eff*atex_theta * np.exp(expo)
+    expo = np.log(g_val / atex_theta) * (u**2) / (w_texture**2 + 1e-30)
+    h = atex_theta * np.exp(expo)
 
     return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
 
-
 # ============================================================
-# Flow-factor placeholders (Patir–Cheng); set to 1/0 for now
+# Patir–Cheng flow factors (pressure φ_x and shear φ_s)
 # ============================================================
-def phi_x_func(h, sigma=sigma_combined):
-    return np.ones_like(h)
+# Tables based on Patir & Cheng’s Gaussian roughness data,
+# as summarised e.g. in Pusterhofer et al. (2018) and
+# standard journal–bearing literature.
+#
+# γ = Peklenik factor (λ0.5,x / λ0.5,y):
+#   γ < 1  → roughness mainly ACROSS the flow direction
+#   γ = 1  → isotropic roughness
+#   γ > 1  → roughness mainly ALONG the flow direction
 
-def phi_s_func(h, sigma=sigma_combined):
-    return np.zeros_like(h)
+_PC_FLOW_TABLE = {
+    # γ : (C,   r,    A1,    alpha1, alpha2, alpha3, A2)
+    1.0 / 9.0: (1.48, 0.42, 2.046,  1.12,   0.78,   0.03, 1.856),
+    1.0 / 6.0: (1.38, 0.42, 1.962,  1.08,   0.77,   0.03, 1.754),
+    1.0 / 3.0: (1.18, 0.42, 1.858,  1.01,   0.76,   0.03, 1.561),
+    1.0      : (0.90, 0.56, 1.899,  0.98,   0.92,   0.05, 1.126),  # isotropic
+    3.0      : (0.225,1.50, 1.560,  0.85,   1.13,   0.08, 0.556),
+    6.0      : (0.520,1.50, 1.290,  0.62,   1.09,   0.08, 0.388),
+    9.0      : (0.870,1.50, 1.011,  0.54,   1.07,   0.08, 0.295),
+}
+
+def _pc_get_params(gamma):
+    """
+    Return Patir–Cheng (C, r, A1, a1, a2, a3, A2) for a given Peklenik factor γ.
+    If γ is not exactly tabulated, use the closest one in log10-space.
+    """
+    # Fall back to isotropic if something weird happens
+    if gamma is None or gamma <= 0:
+        gamma = 1.0
+
+    keys = np.array(list(_PC_FLOW_TABLE.keys()), dtype=float)
+    # Work in log-space so γ and 1/γ are treated symmetrically
+    g_target = np.log10(gamma)
+    g_keys   = np.log10(keys)
+    idx = int(np.argmin(np.abs(g_keys - g_target)))
+    return _PC_FLOW_TABLE[float(keys[idx])]
+
+def _pc_normalised_thickness(h, sigma):
+    """Normalised film thickness H = h / sigma with safe clipping."""
+    h_arr = np.asarray(h, dtype=float)
+    if sigma is None or sigma <= 0.0:
+        # No roughness → flow factors reduce to smooth case
+        return h_arr * 1.0e12  # effectively ∞ → φ_x≈1, φ_s≈0
+    H = h_arr / float(sigma)
+    # Correlations are fitted for H ≳ 0.5; avoid going below that
+    return np.maximum(H, 0.5)
+# ------------------------------------------------------------
+# Pressure flow factor φ_x(h/σ, γ) — mild, PC-consistent fit
+# ------------------------------------------------------------
+def phi_x_func(h, sigma=sigma_combined, gamma=1.0):
+    """
+    Patir–Cheng-style pressure flow factor φ_x(H,γ) with
+    a gentle correlation that does not collapse the mobility
+    in the loaded region.
+
+    - H = h / sigma_combined
+    - gamma = Peklenik orientation factor (≈1 for isotropic)
+    """
+    h_arr = np.asarray(h, dtype=float)
+
+    # No roughness → classical Reynolds
+    if sigma is None or sigma <= 0.0:
+        return np.ones_like(h_arr)
+
+    # Normalised film thickness
+    H = h_arr / float(sigma)
+    # Valid range of PC data is roughly H ≳ 0.5
+    H = np.clip(H, 0.5, 6.0)
+
+    # Base isotropic correlation from PC / Teale (Fig. 5):
+    # phi_x_iso(H) ≈ 1 - 0.9 * exp(-0.56 * H)
+    phi_iso = 1.0 - 0.9 * np.exp(-0.56 * H)
+
+    # Orientation effect (very mild to avoid ill-conditioning):
+    #   γ < 1 → ridges across flow → slightly more restriction
+    #   γ > 1 → ridges along flow  → slightly less restriction
+    gamma = float(gamma)
+    if gamma <= 0.0:
+        gamma = 1.0
+
+    if gamma < 1.0:
+        scale = 1.0 + 0.15 * (1.0 - gamma) / (1.0 - 1.0/9.0)  # up to +15%
+        phi = phi_iso / scale
+    elif gamma > 1.0:
+        scale = 1.0 + 0.15 * (min(gamma, 9.0) - 1.0) / (9.0 - 1.0)
+        phi = phi_iso * scale
+    else:
+        phi = phi_iso
+
+    # Keep φ_x in a moderate, positive range so D_full never collapses.
+    # This is crucial to avoid flat-topped pressure while still
+    # capturing roughness effects.
+    phi = np.clip(phi, 0.6, 1.4)
+
+    return phi
+
+# ------------------------------------------------------------
+# Shear flow factor φ_s(H, γ)
+# ------------------------------------------------------------
+def phi_s_func(h, sigma=sigma_combined, gamma=1.0):
+    """
+    Patir–Cheng shear flow factor φ_s(h/σ, γ) for a moving smooth surface.
+    Currently *not* used inside the Reynolds solver, but provided
+    so it can be included in the shear (friction) model later.
+    """
+    h_arr = np.asarray(h, dtype=float)
+
+    if sigma is None or sigma <= 0.0:
+        return np.zeros_like(h_arr)
+
+    H = _pc_normalised_thickness(h_arr, sigma)
+    C, r, A1, a1, a2, a3, A2 = _pc_get_params(gamma)
+
+    phi_s = np.zeros_like(H)
+
+    # Region H <= 5: polynomial–exponential fit
+    mask1 = H <= 5.0
+    H1 = H[mask1]
+    if H1.size > 0:
+        phi_s[mask1] = (
+            A1 * (H1 ** a1) * np.exp(-a2 * H1 + a3 * H1 * H1)
+        )
+
+    # Region H > 5: simple exponential tail
+    mask2 = ~mask1
+    H2 = H[mask2]
+    if H2.size > 0:
+        phi_s[mask2] = A2 * np.exp(-0.25 * H2 * H2)
+
+    # Ensure non-negative (literature fits give φ_s ≥ 0)
+    phi_s = np.maximum(phi_s, 0.0)
+    return phi_s
+
 # ============================================================
 # CORE SOLVER (per cam angle): mass-conserving Reynolds solver
 # ============================================================
@@ -518,14 +642,28 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         )
         D_full = np.clip(D_full, 0.0, D_cap)
 
-        # Advected mass is ρ h θ
+                # Advected mass is ρ h θ
         q = rho_dim * np.maximum(h_nom, 1e-12) * theta
-        u = Ve
+
+        # --- Patir–Cheng shear flow factor in the mass flux ---
+        # Cell-centre effective speed including roughness-modified sliding
+        phi_s_mass = phi_s_func(h_nom, sigma=sigma_combined)
+        u_cell = Ve + 0.5 * Vs * phi_s_mass     # length N_core array
+
+        # Convert to face-centred speeds for Rusanov (length N_core+1)
+        Nq = len(q)
+        u_face = np.empty(Nq + 1)
+        u_face[1:-1] = 0.5 * (u_cell[:-1] + u_cell[1:])  # interior faces
+        u_face[0] = u_cell[0]                            # left boundary face
+        u_face[-1] = u_cell[-1]                          # right boundary face
+        # ------------------------------------------------------
 
         # Inflow states (full film at bulk density) for Rusanov
         h_nom_seed = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
         h_left, h_right = h_nom_seed[0], h_nom_seed[-1]
-        if u >= 0.0:
+
+        # Use Ve (scalar) to decide flow direction at the boundaries
+        if Ve >= 0.0:
             q_in_left  = PHI_IN * rho0 * h_left * 1.0  # θ=1 at inlet
             q_in_right = q[-1]
         else:
@@ -533,7 +671,8 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             q_in_right = PHI_IN * rho0 * h_right * 1.0
 
         # Conservative advection of mass ρ h θ (Rusanov divergence)
-        term_adv = rusanov_div_bc(u, q, dx, q_in_left, q_in_right)
+        term_adv = rusanov_div_bc(u_face, q, dx, q_in_left, q_in_right)
+
 
         # Compressible squeeze with θ:
         # ∂t(ρ h θ) = ρ θ ∂t h + h θ ∂ρ/∂p ∂t p
@@ -664,7 +803,12 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     gdot_wall = np.minimum(gdot_wall, gdot_max)
     eta_w_sh  = eta_carreau(eta_w, h, gdot_wall)
 
-    tau_c  = np.where(h > 1e-12, eta_w_sh * Vs / h, 0.0)
+    eta_w_sh  = eta_carreau(eta_w, h, gdot_wall)
+
+# Patir–Cheng shear flow factor acting on Couette shear
+    phi_s_wall = phi_s_func(h, sigma=sigma_combined)
+    tau_c  = np.where(h > 1e-12, phi_s_wall * eta_w_sh * Vs / h, 0.0)
+
     tau_p  = 0.5 * h * dpdx
     tau_tot = tau_c + tau_p
 
@@ -882,20 +1026,20 @@ PLOT_CTRL = {
     "profiles_x": {
         "pressure": {
             "ENABLE": False,
-            "surface_state": 0,       # 0=UN, 1=TEXTURED, 2=BOTH
-            "angles_deg": [5.0],
+            "surface_state": 1,       # 0=UN, 1=TEXTURED, 2=BOTH
+            "angles_deg": [55],
             "rpms": [300],
-            "texture_densities": [8],
+            "texture_densities": [5],
         },
         "film": {
-            "ENABLE":False,
-            "surface_state": 0,
-            "angles_deg": [5.0],
+            "ENABLE": False,
+            "surface_state": 1,
+            "angles_deg": [5],
             "rpms": [300],
-            "texture_densities": [8],
+            "texture_densities": [5],
         },
         "asperity": {
-            "ENABLE":False,
+            "ENABLE": False,
             "surface_state": 0,
             "angles_deg": [5.0],
             "rpms": [300],
@@ -938,8 +1082,8 @@ PLOT_CTRL = {
     },
     "avg_torque_reduction": {
         "ENABLE": True,
-        "rpms": [ 500, 700, 900],
-        "texture_densities": [5, 8, 10],
+        "rpms": [ 300],
+        "texture_densities": [5],
     },
     "kin_vars": {
         "ENABLE": False,
@@ -947,8 +1091,8 @@ PLOT_CTRL = {
     },
     "htex": {
         "ENABLE": False,
-        "rpms": [300],
-        "texture_densities": [5, 8, 10],
+        "rpms": [300,500,700,900],
+        "texture_densities": [5],
     },
 }
 
@@ -1301,4 +1445,3 @@ if __name__ == "__main__":
     run_plots()
     if SHOW_PLOTS:
         plt.show()
-
