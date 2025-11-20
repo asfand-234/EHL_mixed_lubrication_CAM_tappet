@@ -88,9 +88,12 @@ gamma_th  = GAMMA_TH_TABLE[TEMP_C]
 # ============================================================
 # Greenwood–Tripp constants 
 # ============================================================
-sigma_combined = 0.2e-6
+sigma_combined = 0.3e-6
 beta_a         = sigma_combined/0.001
-eta_R          = (0.05/(sigma_combined*beta_a))
+eta_R          = (0.06/(sigma_combined*beta_a))
+# Asperity summit density for Greenwood–Tripp / Greenwood–Williamson model
+# (typical order for ground steel ~1e9–1e10 1/m²; use your measured value if available)
+ETA_ASP        = 1.0e10  # [1/m^2], adjust from surface measurements
 
 # GT F_{3/2} lookup (pressure/load)
 _gt_w = np.linspace(0.0, 8.0, 400)
@@ -100,6 +103,45 @@ _lam_grid = np.linspace(0.0, 6.0, 360)
 _kern = _gt_w_pow[None, :] * np.exp(-0.5 * (_lam_grid[:, None] + _gt_w) ** 2)
 _F32_lookup = np.trapezoid(_kern, _gt_w, axis=1) / _gt_norm
 _F32_lookup[-1] = 0.0
+def _F52_greenwood_tripp(lam):
+    """
+    Greenwood–Tripp statistical function F_{5/2}(lambda).
+
+    Uses the standard rational approximation (Jedynak & Gilewicz 2013,
+    also summarized in many GT reviews) for a Gaussian height distribution.
+    This is a very accurate fit to the exact integral.
+
+        F_{5/2}(h) = (a0 + a1 h + a2 h^2 + a3 h^3) /
+                      (1 + b1 h + ... + b6 h^6) * exp(-h^2 / 2)
+
+    where h = lambda = separation / sigma.
+    """
+
+    lam = np.asarray(lam, dtype=float)
+
+    # Coefficients for F_{5/2}(h)
+    a0, a1, a2, a3 = (
+        0.616634218997,
+        0.108855827811,
+        0.023453835635,
+        0.000449332509,
+    )
+    b1, b2, b3, b4, b5, b6 = (
+        1.919948267476,
+        1.635304362591,
+        0.799392556572,
+        0.240278859212,
+        0.043178653945,
+        0.003863334276,
+    )
+
+    num = a0 + a1 * lam + a2 * lam**2 + a3 * lam**3
+    den = 1.0 + b1 * lam + b2 * lam**2 + b3 * lam**3 + b4 * lam**4 + b5 * lam**5 + b6 * lam**6
+
+    F52 = num / den * np.exp(-0.5 * lam**2)
+
+    # numerical safety: no negative values
+    return np.maximum(F52, 0.0)
 def asperity_pressure_zhao_masjedi(
     h,
     x,
@@ -107,8 +149,23 @@ def asperity_pressure_zhao_masjedi(
     Ve,
     R,
     sigma=sigma_combined,
-    hardness_GPa=6.5,
+    hardness_GPa=None,   # kept only for API compatibility; not used
 ):
+    """
+    Asperity contact pressure from Greenwood–Tripp model.
+
+    Uses the GT expression (e.g. Greenwood & Tripp, Taylor 2022 review):
+
+        p_a = (8*sqrt(2)/15) * pi * (zeta * beta_a * sigma)^2
+              * sqrt(sigma / beta_a) * E_star * f_{5/2}(lambda)
+
+    with lambda = h/sigma and f_{5/2} from _F52_greenwood_tripp().
+
+    Notes:
+    - No hardness or plasticity cap is applied here.
+    - p_a depends only on local separation h(x), so it is naturally
+      largest where the film is thinnest (cam nose region).
+    """
 
     # ------------ basic shape checks ------------
     h = np.asarray(h, dtype=float)
@@ -118,92 +175,33 @@ def asperity_pressure_zhao_masjedi(
     if h.size < 2:
         return np.zeros_like(h)
 
-    # ------------ material / roughness data ------------
-    r = float(sigma)                     # RMS roughness [m]
-    hd = float(hardness_GPa) * 1e9       # hardness [Pa]
+    # ------------ local separation parameter lambda = h / sigma ------------
+    sigma_loc = float(max(sigma, 1e-12))
+    lam = np.maximum(h / sigma_loc, 0.0)   # separation is non-negative
 
-    # Effective line load (per unit width)
-    W_total = float(max(W_total, 0.0))
-    if W_total <= 0.0:
-        return np.zeros_like(h)
+    # Greenwood–Tripp statistical function f_{5/2}(lambda)
+    f52 = _F52_greenwood_tripp(lam)
 
-    # ------------ dimensionless groups (Masjedi 2012) ------------
-    # W̄, Ū, Ḡ, r̂, V̄
-    R_eff = float(max(R, 1e-12))
-    w_line = W_total / max(L, 1e-30)          # [N/m]
+    # ------------ Greenwood–Tripp prefactor ------------
+    # zeta is the roughness morphology factor such that (zeta * beta_a * sigma)
+    # lies in the typical range ~0.03–0.05 for engineering surfaces.
+    # In your code this is encoded via 'eta_R' so that:
+    #   (eta_R * beta_a * sigma) ≈ 0.05
+    zeta = eta_R
 
-    W_dim = w_line / (E_star * R_eff + 1e-30)          # W̄
-    U_dim = eta0 * abs(Ve) / (E_star * R_eff + 1e-30)  # Ū
-    G_dim = alpha0 * E_star                            # Ḡ
-    r_hat = r / (R_eff + 1e-30)                        # r̂
-    V_dim = hd / (E_star + 1e-30)                      # V̄
+    pre = (
+        (8.0 * np.sqrt(2.0) / 15.0)
+        * np.pi
+        * (zeta * beta_a * sigma_loc) ** 2
+        * np.sqrt(sigma_loc / beta_a)
+        * E_star
+    )
 
-    # clamp to avoid underflow / overflow in powers and logs
-    W_cl   = max(W_dim, 1e-12)
-    U_cl   = max(U_dim, 1e-12)
-    G_cl   = max(G_dim, 1e-12)
-    rhat_cl = max(r_hat, 1e-12)
-    V_cl   = max(V_dim, 1e-12)
+    p_asp_x = pre * f52
 
-    # ------------ Masjedi asperity load ratio L_a (curve-fit to Zhao model) ------------
-    # Functional form from Masjedi & Khonsari (2012, asperity-load formula):
-    #   L_a = C * W̄^a * Ū^b * Ḡ^c *
-    #         ln[ 1 + K * r̂^{m} * V̄^{n} * W̄^{p} * Ū^{q} * Ḡ^{s} ]
-    #
-    # Coefficients (C, a, b, c, K, m, n, p, q, s) taken from the published fit.
-    # (These numbers are specific to *line contacts* and Gaussian roughness.)
-    C  = 5.0e-3
-    a  = -0.408
-    b  = -0.088
-    c  =  0.103
-    K  = 4.47e3
-    m  =  6.015
-    n  =  1.168
-    p  =  0.485
-    q  = -3.741
-    s  = -2.898
-
-
-    # numeric safety: enforce >1 before log
-    inner = 1.0 + K * (rhat_cl**m) * (V_cl**n) * (W_cl**p) * (U_cl**q) * (G_cl**s)
-    if inner <= 1.0:
-        La_frac = 0.0
-    else:
-    # La from Eq. (21) is in **percent**
-        La_percent = C * (W_cl**a) * (U_cl**b) * (G_cl**c) * np.log(inner)
-        La_percent = max(La_percent, 0.0)
-    # convert percent → fraction of total load
-        La_frac = La_percent / 100.0
-
-# optional: avoid unphysical >70% asperity load (Masjedi advises caution there)
-    La_frac = min(La_frac, 0.7)
-
-    Wa_target = La_frac * W_total
-
-    if Wa_target <= 0.0:
-        return np.zeros_like(h)
-
-    # ------------ spatial distribution via Greenwood–Tripp ------------
-    # use your existing F_{3/2}(λ) lookup: _lam_grid, _F32_lookup
-    lam = np.maximum(h / (r + 1e-30), 0.0)
-    lam_clipped = np.clip(lam, _lam_grid[0], _lam_grid[-1])
-
-    F32 = np.interp(lam_clipped, _lam_grid, _F32_lookup)
-    F32 = np.maximum(F32, 0.0)
-
-    if not np.any(F32 > 0.0):
-        return np.zeros_like(h)
-
-    # scale F32 so that ∫ p_asp dx * L = Wa_target
-    denom = np.trapezoid(F32, x) * L
-    if denom <= 1e-30:
-        return np.zeros_like(h)
-
-    scale = Wa_target / denom        # [Pa], because Wa = ∫(scale*F32)dx * L
-    p_asp_x = scale * F32
-
-    # numeric safety: no negative pressures due to roundoff
+    # numerical safety
     p_asp_x = np.maximum(p_asp_x, 0.0)
+
     return p_asp_x
 
 # ============================================================
@@ -1025,16 +1023,16 @@ SHOW_PLOTS = True
 PLOT_CTRL = {
     "profiles_x": {
         "pressure": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 1,       # 0=UN, 1=TEXTURED, 2=BOTH
-            "angles_deg": [55],
+            "angles_deg": [7],
             "rpms": [300],
             "texture_densities": [5],
         },
         "film": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 1,
-            "angles_deg": [5],
+            "angles_deg": [7],
             "rpms": [300],
             "texture_densities": [5],
         },
@@ -1055,14 +1053,14 @@ PLOT_CTRL = {
             "sigma_values": None,    # None → use base sigma_combined
         },
         "Fh": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
             "sigma_values": None,
         },
         "Fb": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
@@ -1081,7 +1079,7 @@ PLOT_CTRL = {
         "rpms": [300, 500, 700, 900],
     },
     "avg_torque_reduction": {
-        "ENABLE": True,
+        "ENABLE": False,
         "rpms": [ 300],
         "texture_densities": [5],
     },
