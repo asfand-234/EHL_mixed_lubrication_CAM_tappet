@@ -1,6 +1,6 @@
 # Calibration Plan for E_eff Values
 
-This repository includes numerical models in `ehl_python.txt` to evaluate the mixed lubrication line contact scenario. Per the AGENTS instructions, code should remain unchanged while tuning the `E_eff` parameter for each rpm and texture density case. The steps below outline how to perform that calibration.
+This repository includes numerical models in `ehl_python.txt` to evaluate the mixed lubrication line contact scenario.  The steps below outline how to perform that calibration.
 
 ## Prerequisites
 - Python environment with `numpy`, `pandas`, `scipy`, and `matplotlib` installed.
