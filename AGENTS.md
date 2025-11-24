@@ -42,6 +42,3 @@ Use the following table format to store tuned values (create a separate results 
 | 900 | 8%              | 11.91                |                        |                    |
 | 900 | 10%             | 6.87                 |                        |                    |
 
-## Notes
-- No source code modifications are required or recommended; all tuning should be performed via runtime parameters and recorded externally.
-- Consider automating the iteration with a separate calibration script that imports the model functions and sweeps candidate `E_eff` values to speed up convergence for each case.
