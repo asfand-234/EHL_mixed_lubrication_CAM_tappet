@@ -49,7 +49,7 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-
+E_eff   = 1
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
@@ -496,7 +496,7 @@ def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture):
     # Periodic pocket centers with pitch d_texture
     u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
     expo = np.log(g_val / atex_theta) * (u**2) / (w_texture**2 + 1e-30)
-    h = atex_theta * np.exp(expo)
+    h = E_eff*atex_theta * np.exp(expo)
 
     return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
 
@@ -1560,3 +1560,4 @@ if __name__ == "__main__":
     run_plots()
     if SHOW_PLOTS:
         plt.show()
+
