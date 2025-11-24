@@ -1,6 +1,6 @@
 # Calibration Plan for E_eff Values
 
-This repository includes numerical models in `ehl_python.txt` to evaluate the mixed lubrication line contact scenario. Per the AGENTS instructions, code should remain unchanged while tuning the `E_eff` parameter for each rpm and texture density case. The steps below outline how to perform that calibration without modifying source code.
+This repository includes numerical models in `ehl_python.txt` to evaluate the mixed lubrication line contact scenario. Per the AGENTS instructions, code should remain unchanged while tuning the `E_eff` parameter for each rpm and texture density case. The steps below outline how to perform that calibration.
 
 ## Prerequisites
 - Python environment with `numpy`, `pandas`, `scipy`, and `matplotlib` installed.
@@ -11,7 +11,7 @@ This repository includes numerical models in `ehl_python.txt` to evaluate the mi
 
 ## Recommended Workflow
 1. **Prepare runtime directory**
-   - Set `DATA_DIR` (in your execution environment) to point to the folder containing the input files. No changes to `ehl_python.txt` are required if you symlink or copy files so that `DATA_DIR` resolves correctly.
+   - Set `DATA_DIR` (in your execution environment) to point to the folder containing the input files. if you symlink or copy files so that `DATA_DIR` resolves correctly.
 2. **Load baseline data**
    - Use the existing functions in `ehl_python.txt` to load cam lift data and untextured friction components. These serve as reference for percentage reduction calculations.
 3. **Select a test case**
