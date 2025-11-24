@@ -1,6 +1,6 @@
 Read Python code in text file "ehl_python.txt" which is related to average friction torque reduction due to surface textures using 1D Mixed lubrication Line contact having compressible reynolds equation solution in CAM and tappet mechanism.
 And cam lift data "updated_lift.txt"
-
+TO COMPLETE BELOW TASK, YOU HAVE NO ANY TIME LIMIT. TAKE AS MUCH TIME YOU NEED. PERFORM ONE BY ONE CASE RUN AND ACHIEVE THE TARGETS.
 **TASK:**
 Calibrate/tune "E_eff" value in htex for each case of rpm and texture area density to meet the following targets % of averaged friction torque reduction with respect to untextured. 
 *TARGET RESULTS:*
