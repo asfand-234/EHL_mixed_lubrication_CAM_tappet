@@ -1,3 +1,4 @@
+
 # ============================================================
 import os
 import numpy as np
@@ -11,7 +12,7 @@ import pandas as pd
 plt.rcParams.update({"figure.dpi": 120})
 
 HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-DATA_DIR = "/content/cam"   
+DATA_DIR = "/content/cam"
 CAM_FILE = "updated_lift.txt"
 
 # =======================
@@ -53,10 +54,10 @@ E_star   = 217e9        # [Pa]
 # Temperature-dependent parameter tables
 # ============================================================
 ETA0_TABLE     = {60: 0.04496, 90: 0.01381, 110: 0.008155}    # Pa·s
-ALPHA0_TABLE   = {60: 21e-9,   90: 16e-9,    110: 10e-9}      # Pa^-1
+ALPHA0_TABLE   = {60: 21e-9,   90: 16e-9,    110: 13e-9}      # Pa^-1
 RHO0_TABLE     = {60: 887.0,   90: 858.44,   110: 840.0}      # kg/m^3
-MU_B_TABLE     = {60: 0.12,    90: 0.11,     110: 0.10}
-GAMMA_LIM_TABLE= {60: 0.07,    90: 0.06,     110: 0.06}       # 1/Pa
+MU_B_TABLE     = {60: 0.12,    90: 0.12,     110: 0.12}
+GAMMA_LIM_TABLE= {60: 0.07,    90: 0.07,     110: 0.06}       # 1/Pa
 LAM_C_TABLE    = {60: 3.5e-6,  90: 3.0e-6,   110: 2.0e-6}
 N_C_TABLE      = {60: 0.85,    90: 0.65,     110: 0.52}
 PHI_IN_TABLE   = {60: 0.6,     90: 0.60,     110: 0.7}
@@ -68,7 +69,7 @@ C_ROELANDS     = 5.1e-9
 T_SHIFT        = 138.0
 
 K_THERM_TABLE  = {60: 0.10, 90: 0.14, 110: 0.14}
-GAMMA_TH_TABLE = {60: 3.5e-4, 90: 6.5e-4, 110: 6.5e-4}
+GAMMA_TH_TABLE = {60: 3.5e-4, 90: 4.5e-4, 110: 6.5e-4}
 
 if TEMP_C not in (60, 90, 110):
     raise ValueError("TEMP_C must be one of {60, 90, 110}.")
@@ -86,62 +87,67 @@ k_lub     = K_THERM_TABLE[TEMP_C]
 gamma_th  = GAMMA_TH_TABLE[TEMP_C]
 
 # ============================================================
-# Greenwood–Tripp constants 
+# Greenwood–Tripp constants
 # ============================================================
-sigma_combined = 0.3e-6
-beta_a         = sigma_combined/0.001
-eta_R          = (0.06/(sigma_combined*beta_a))
-# Asperity summit density for Greenwood–Tripp / Greenwood–Williamson model
-# (typical order for ground steel ~1e9–1e10 1/m²; use your measured value if available)
-ETA_ASP        = 1.0e10  # [1/m^2], adjust from surface measurements
-
-# GT F_{3/2} lookup (pressure/load)
-_gt_w = np.linspace(0.0, 8.0, 400)
-_gt_w_pow = _gt_w**1.5
-_gt_norm = np.sqrt(2.0*np.pi)
-_lam_grid = np.linspace(0.0, 6.0, 360)
-_kern = _gt_w_pow[None, :] * np.exp(-0.5 * (_lam_grid[:, None] + _gt_w) ** 2)
-_F32_lookup = np.trapezoid(_kern, _gt_w, axis=1) / _gt_norm
-_F32_lookup[-1] = 0.0
+sigma_combined = 0.30e-6
+beta_a         = sigma_combined/0.002
+eta_R          = (0.057/(sigma_combined*beta_a))
 def _F52_greenwood_tripp(lam):
     """
-    Greenwood–Tripp statistical function F_{5/2}(lambda).
+    Greenwood F_{5/2}(H) with H = lam = h/sigma.
 
-    Uses the standard rational approximation (Jedynak & Gilewicz 2013,
-    also summarized in many GT reviews) for a Gaussian height distribution.
-    This is a very accurate fit to the exact integral.
-
-        F_{5/2}(h) = (a0 + a1 h + a2 h^2 + a3 h^3) /
-                      (1 + b1 h + ... + b6 h^6) * exp(-h^2 / 2)
-
-    where h = lambda = separation / sigma.
+    Piecewise fit from the table:
+      for H < 2.0:      f1 * exp(f2 ln(H1-H) + f3 [ln(H1-H)]^2)
+      for 2.0 ≤ H < 3.5: f4 * exp(f5 ln(H2-H) + f6 [ln(H2-H)]^2)
+      for 3.5 ≤ H < 4.0: f7 (H3-H)^f8
+      for H ≥ 4.0:       0
     """
 
     lam = np.asarray(lam, dtype=float)
+    H   = np.maximum(lam, 0.0)  # H = λ, non-negative
 
-    # Coefficients for F_{5/2}(h)
-    a0, a1, a2, a3 = (
-        0.616634218997,
-        0.108855827811,
-        0.023453835635,
-        0.000449332509,
-    )
-    b1, b2, b3, b4, b5, b6 = (
-        1.919948267476,
-        1.635304362591,
-        0.799392556572,
-        0.240278859212,
-        0.043178653945,
-        0.003863334276,
-    )
+    # Constants from the Greenwood table
+    H1, H2, H3 = 9.0, 8.0, 4.0
 
-    num = a0 + a1 * lam + a2 * lam**2 + a3 * lam**3
-    den = 1.0 + b1 * lam + b2 * lam**2 + b3 * lam**3 + b4 * lam**4 + b5 * lam**5 + b6 * lam**6
+    f1 = 0.11755e-39
+    f2 = 0.67331e2
+    f3 = -0.11699e2
 
-    F52 = num / den * np.exp(-0.5 * lam**2)
+    f4 = 0.15827e-20
+    f5 = 0.29156e2
+    f6 = -0.29786e1
 
-    # numerical safety: no negative values
-    return np.maximum(F52, 0.0)
+    f7 = 0.11201e-3
+    f8 = 0.19447e1
+
+    F = np.zeros_like(H)
+
+    # --- Region 1: H < 2.0 ---
+    m1 = (H < 2.0)
+    if np.any(m1):
+        t1 = np.maximum(H1 - H[m1], 1e-12)
+        ln1 = np.log(t1)
+        F[m1] = f1 * np.exp(f2 * ln1 + f3 * ln1**2)
+
+    # --- Region 2: 2.0 ≤ H < 3.5 ---
+    m2 = (H >= 2.0) & (H < 3.5)
+    if np.any(m2):
+        t2 = np.maximum(H2 - H[m2], 1e-12)
+        ln2 = np.log(t2)
+        F[m2] = f4 * np.exp(f5 * ln2 + f6 * ln2**2)
+
+    # --- Region 3: 3.5 ≤ H < 4.0 ---
+    m3 = (H >= 3.5) & (H < 4.0)
+    if np.any(m3):
+        t3 = np.maximum(H3 - H[m3], 0.0)
+        F[m3] = f7 * t3**f8
+
+    # H ≥ 4.0 → F = 0 already from initialisation
+
+    # Numerical safety: no negative values
+    return np.maximum(F, 0.0)
+
+
 def asperity_pressure_zhao_masjedi(
     h,
     x,
@@ -149,22 +155,31 @@ def asperity_pressure_zhao_masjedi(
     Ve,
     R,
     sigma=sigma_combined,
-    hardness_GPa=None,   # kept only for API compatibility; not used
+    hardness_GPa=None,
 ):
     """
-    Asperity contact pressure from Greenwood–Tripp model.
+    Asperity contact pressure from Greenwood–Tripp model with optional
+    elasto-plastic (hardness-based) saturation.
 
-    Uses the GT expression (e.g. Greenwood & Tripp, Taylor 2022 review):
+    Elastic Greenwood–Tripp (GT) pressure:
 
-        p_a = (8*sqrt(2)/15) * pi * (zeta * beta_a * sigma)^2
-              * sqrt(sigma / beta_a) * E_star * f_{5/2}(lambda)
+        p_a,el = (8*sqrt(2)/15) * pi * (zeta * beta_a * sigma)^2
+                 * sqrt(sigma / beta_a) * E_star * F_{5/2}(lambda),
 
-    with lambda = h/sigma and f_{5/2} from _F52_greenwood_tripp().
+    with lambda = h/sigma and F_{5/2} from _F52_greenwood_tripp().
 
-    Notes:
-    - No hardness or plasticity cap is applied here.
-    - p_a depends only on local separation h(x), so it is naturally
-      largest where the film is thinnest (cam nose region).
+    Optional hardness / plasticity correction:
+    - If hardness_GPa is None or <= 0: pure elastic GT (original behaviour).
+    - If hardness_GPa > 0: local asperity pressure is smoothly limited
+      to ~H_mat, where H_mat = hardness_GPa * 1e9 (Pa), via
+
+          p_a = p_a,el / sqrt(1 + (p_a,el / H_mat)^2)
+
+      so for p_a,el << H_mat  -> p_a ≈ p_a,el  (no change),
+         for p_a,el >> H_mat  -> p_a ≈ H_mat   (saturation).
+
+    This modification is purely on the asperity side and does NOT change
+    the hydrodynamic film solution or Hertzian quantities.
     """
 
     # ------------ basic shape checks ------------
@@ -179,7 +194,7 @@ def asperity_pressure_zhao_masjedi(
     sigma_loc = float(max(sigma, 1e-12))
     lam = np.maximum(h / sigma_loc, 0.0)   # separation is non-negative
 
-    # Greenwood–Tripp statistical function f_{5/2}(lambda)
+    # Greenwood–Tripp statistical function F_{5/2}(lambda)
     f52 = _F52_greenwood_tripp(lam)
 
     # ------------ Greenwood–Tripp prefactor ------------
@@ -197,7 +212,19 @@ def asperity_pressure_zhao_masjedi(
         * E_star
     )
 
-    p_asp_x = pre * f52
+    # -------- elastic GT asperity pressure --------
+    p_asp_el = pre * f52
+    p_asp_el = np.maximum(p_asp_el, 0.0)
+
+    # -------- optional hardness-based softening --------
+    if hardness_GPa is not None and hardness_GPa > 0.0:
+        H_mat = hardness_GPa * 1e9  # [Pa]
+        # Smooth saturation: p -> p / sqrt(1 + (p/H)^2)
+        ratio = p_asp_el / H_mat
+        p_asp_x = p_asp_el / np.sqrt(1.0 + ratio**2)
+    else:
+        # Pure elastic GT (original behaviour)
+        p_asp_x = p_asp_el
 
     # numerical safety
     p_asp_x = np.maximum(p_asp_x, 0.0)
@@ -208,60 +235,149 @@ def asperity_pressure_zhao_masjedi(
 # Houpert viscosity + DH density + ΔT model
 # ============================================================
 def _houpert_params(eta0_local, T0_c, alpha0_local, beta0_local=BETA0_CONST):
-    lneta0_plus = (np.log(max(eta0_local, 1e-16)) + 9.67)
+    """
+    Houpert auxiliary parameters Z and S0 (eq. 20).
+    """
+    lneta0_plus = np.log(max(eta0_local, 1e-16)) + 9.67
     Z  = alpha0_local / (C_ROELANDS * lneta0_plus + 1e-30)
     S0 = beta0_local * (T0_c - T_SHIFT) / (lneta0_plus + 1e-30)
     return Z, S0, lneta0_plus
 
+
 def _alpha_star(p, T_c, eta0_local, T0_c, Z, S0, lneta0_plus):
-    p_eff = np.maximum(p, 0.0)
-    temp_ratio = ((np.asarray(T_c, float) - T_SHIFT) /
-                  (T0_c - T_SHIFT + 1e-30))
-    temp_factor = np.power(np.maximum(temp_ratio, 1e-12), -S0)
-    press_factor = np.power(1.0 + p_eff / P0_HOUPERT, Z)
-    numer = lneta0_plus * (temp_factor * press_factor - 1.0)
-    return numer / (p_eff + 1e-30)
+    """
+    Effective pressure–viscosity coefficient α* (Houpert, eqs. 19–20):
+
+        α* = [ln(η0)+9.67]/p *
+              ((T-138)/(T0-138))^(-S0) * ( (1+p/P0)^Z - 1 )
+    """
+    p_arr = np.asarray(p, dtype=float)
+    T_arr = np.asarray(T_c, dtype=float)
+
+    # Non-negative pressure
+    p_eff = np.maximum(p_arr, 0.0)
+
+    # Temperature factor: ((T - 138)/(T0 - 138))^(-S0)
+    temp_ratio = (T_arr - T_SHIFT) / (T0_c - T_SHIFT + 1e-30)
+    temp_ratio = np.maximum(temp_ratio, 1e-12)
+    temp_factor = temp_ratio**(-S0)
+
+    # Pressure factor: (1 + p/P0)^Z - 1
+    press = 1.0 + p_eff / P0_HOUPERT
+    press_minus1 = press**Z - 1.0
+
+    # Avoid division by zero; correct p=0 separately with the limit
+    den = np.where(p_eff > 0.0, p_eff, 1.0)
+    alpha = lneta0_plus * temp_factor * press_minus1 / den
+
+    # Limit as p -> 0: ((1+p/P0)^Z - 1)/p -> Z/P0
+    alpha = np.where(
+        p_eff > 0.0,
+        alpha,
+        lneta0_plus * temp_factor * (Z / P0_HOUPERT)
+    )
+    return alpha
+
 
 def deltaT_karthikeyan(u_av, h, p, a, eta_abs, k_l, gamma_c, T_c):
+    """
+    Average temperature rise ΔT (Karthikeyan et al., eq. 23):
+
+        ΔT = { u_av T γ h p + 2 a η̄^2 / h } /
+             { a k / h - u_av γ h p }
+
+    with η̄ = η / η0 (dimensionless viscosity ratio).
+    """
     h_eff = np.maximum(h, 1e-12)
     a_eff = np.maximum(a, 1e-12)
     u_abs = np.abs(u_av)
-    num = u_abs * T_c * gamma_c * h_eff * np.maximum(p, 0.0) + 2.0 * a_eff * (np.maximum(eta_abs, 1e-7)**2) / h_eff
-    den = a_eff * k_l / h_eff - u_abs * gamma_c * h_eff * np.maximum(p, 0.0)
-    den = np.where(np.abs(den) < 1e-9, np.sign(den)*1e-9, den)
+    p_eff = np.maximum(p, 0.0)
+
+    # Dimensionless viscosity ratio η̄ = η / η0
+    eta_bar = np.maximum(eta_abs, 1e-7) / max(eta0, 1e-16)
+
+    # Numerator and denominator of eq. (23)
+    num = (
+        u_abs * T_c * gamma_c * h_eff * p_eff +
+        2.0 * a_eff * (eta_bar**2) / h_eff
+    )
+    den = a_eff * k_l / h_eff - u_abs * gamma_c * h_eff * p_eff
+
+    # Avoid division by ~0
+    den = np.where(np.abs(den) < 1e-9, np.sign(den) * 1e-9, den)
+
     dT = num / den
+    # Clamp to a reasonable physical range
     return np.clip(dT, -40.0, 180.0)
 
+
 def eta_houpert(p, T0_c, Ve_local, h_local, a_local):
-    Z, S0, lneta0_plus = _houpert_params(
-        eta0, T0_c, alpha0, BETA0_CONST
+    """
+    Thermo-Houpert viscosity model:
+
+    1) Compute η(p, T0_c) via Houpert law.
+    2) Use that η in Karthikeyan ΔT model to get ΔT.
+    3) Recompute η at T = T0_c + ΔT.
+    """
+    # Houpert parameters at inlet reference state
+    Z, S0, lneta0_plus = _houpert_params(eta0, T0_c, alpha0, BETA0_CONST)
+
+    p_arr = np.asarray(p, dtype=float)
+
+    # First pass: viscosity at T0_c
+    alpha_s = _alpha_star(p_arr, T0_c, eta0, T0_c, Z, S0, lneta0_plus)
+    eta_init = eta0 * np.exp(
+        np.clip(alpha_s * np.maximum(p_arr, 0.0), -50.0, 50.0)
     )
-    # First pass at T0_c
-    alpha_s = _alpha_star(p, T0_c, eta0, T0_c, Z, S0, lneta0_plus)
-    eta_init = np.maximum(eta0 * np.exp(np.clip(alpha_s*np.maximum(p,0.0), -50.0, 50.0)), 1e-7)
-    # Use ABSOLUTE viscosity (Pa·s) in ΔT model
-    dT = deltaT_karthikeyan(Ve_local, h_local, p, a_local, eta_init, k_lub, gamma_th, T0_c)
+    eta_init = np.maximum(eta_init, 1e-7)
+
+    # Temperature rise from Karthikeyan model using absolute viscosity
+    dT = deltaT_karthikeyan(
+        Ve_local, h_local, p_arr, a_local,
+        eta_init, k_lub, gamma_th, T0_c
+    )
     T_upd = T0_c + dT
-    # Second pass at updated temperature
-    alpha_s2 = _alpha_star(p, T_upd, eta0, T0_c, Z, S0, lneta0_plus)
-    eta_new = np.maximum(eta0 * np.exp(np.clip(alpha_s2*np.maximum(p,0.0), -50.0, 50.0)), 1e-7)
+
+    # Second pass: viscosity at updated temperature
+    alpha_s2 = _alpha_star(p_arr, T_upd, eta0, T0_c, Z, S0, lneta0_plus)
+    eta_new = eta0 * np.exp(
+        np.clip(alpha_s2 * np.maximum(p_arr, 0.0), -50.0, 50.0)
+    )
+    eta_new = np.maximum(eta_new, 1e-7)
+
     return eta_new, dT
 
+
 def rho_dowson_higginson(p, dT):
+    """
+    Dowson–Higginson density with thermal correction (standard form):
+
+        ρ = ρ0 * (1 + 0.6e-9 p)/(1 + 1.7e-9 p) * (1 - γ ΔT)
+    """
     p_eff = np.maximum(p, 0.0)
     frac = (1.0 + 0.6e-9 * p_eff) / (1.0 + 1.7e-9 * p_eff)
     therm = (1.0 - gamma_th * dT)
-    return np.maximum(rho0 * frac * therm, 1.0)
+    rho = rho0 * frac * therm
+    return np.maximum(rho, 1.0)
+
 
 def drho_dp_numeric(p, dT, Ve_local, h_local, a_local):
-    dp = 1.0e3
+    """
+    Numerical ∂ρ/∂p at fixed temperature (ΔT held constant),
+    using central finite differences on ρ(p, ΔT).
+
+    This is the derivative that appears in the compressible
+    squeeze term of the Reynolds equation.
+    """
+    dp = 1.0e3  # Pa
     p_lo = np.maximum(p - dp, 0.0)
     p_hi = p + dp
-    eta_lo, dT_lo = eta_houpert(p_lo, TEMP_C, Ve_local, h_local, a_local)
-    eta_hi, dT_hi = eta_houpert(p_hi, TEMP_C, Ve_local, h_local, a_local)
-    rho_lo = rho_dowson_higginson(p_lo, dT_lo)
-    rho_hi = rho_dowson_higginson(p_hi, dT_hi)
-    return (rho_hi - rho_lo) / (2.0*dp + 1e-30)
+
+    rho_lo = rho_dowson_higginson(p_lo, dT)
+    rho_hi = rho_dowson_higginson(p_hi, dT)
+
+    return (rho_hi - rho_lo) / (2.0 * dp + 1e-30)
+
 
 # ============================================================
 # Shear-thinning (Carreau)
@@ -274,11 +390,11 @@ def eta_carreau(etaN,h,gdot):
 
 
 # ============================================================
-# Film seed (Hamrock–Dowson, line-contact 
+# Film seed (Hamrock–Dowson, line-contact
 # ============================================================
 def central_film_thickness(R, W, Ve):
     R = float(np.clip(R, 1e-7, None))
-    W = float(np.clip(W, 0.0, None))
+    W = float(np.clip(W, 1e-6, None))
     U = (eta0 * np.abs(Ve))/(E_star * R + 1e-30)
     G = alpha0 * E_star
     W_star = W / (E_star * L * R + 1e-30)
@@ -295,7 +411,8 @@ def kin_arrays(rpm):
     Vc = (rb + lift + d2lift_s ) * w
     Ve = 0.5 * (Vc + Vf)
     Vs = Vc - Vf
-    W = k_spring * (lift + delta) + Meq * (w**2) * d2lift_s 
+   
+    W = k_spring * (lift + delta) + (Meq * (w**2) * d2lift_s)
     return R, Ve, Vs, W, w
 
 # ============================================================
@@ -308,7 +425,7 @@ def ph_hertz(W,a):
     return 2.0*np.maximum(W,0.0)/(np.pi*np.maximum(a,1e-12)*L + 1e-30)
 
 # ============================================================
-# Elastic deflection (plane strain log-kernel) 
+# Elastic deflection (plane strain log-kernel)
 # ============================================================
 def elastic_deflection(x, p):
     x = np.asarray(x, float)
@@ -356,13 +473,13 @@ def rusanov_dqdx_bc(q, dx, q_in_left, q_in_right, alpha=1.0):
 # ============================================================
 # TEXTURE MODEL
 # ============================================================
-w_texture = 35e-6       # [m] 
+w_texture = 35e-6       # [m]
 g_val     = 1e-9        # [m]
 x_start   = 0.0
 X_in, X_out = -3.5, 2.5
 
 D_TEXTURE = {"5%": 700e-6, "8%": 430.5e-6, "10%": 350e-6}
-A_TEXTURE_CONST = 4e-6     
+A_TEXTURE_CONST = 4e-6
 TEXTURE_ZONE_MASK = np.ones_like(TH_DEG, dtype=bool)
 
 def integrate_shift(Vf, w):
@@ -530,7 +647,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 Nx=171, iters=80, substep_cap=6, relax_p=0.75, relax_h=0.55,
                 M_core=301, observe=True):
 
-    CFL_TARGET = 0.5
+    CFL_TARGET = 0.4
     P_CAP = 2.5e9
 
     # ---------------- Geometry & scales ----------------
@@ -540,7 +657,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     ph = max(ph_hertz(W, a), 1e3)    # Hertz peak pressure scale
 
     h_floor = 1.0e-9                # min physical film to avoid division by 0
-    gdot_max  = 1.0e8               # cap on shear rate [1/s]
+    gdot_max  = 1.0e9               # cap on shear rate [1/s]
     D_cap     = 1.0e14              # cap on mobility (dimensionless-ish)
 
     # ---------------- Extended window on x ----------------
@@ -568,7 +685,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
     # Initial pressure on core: Hertz-type ND seed, scaled by ph
     P0 = np.sqrt(np.maximum(1.0 - s**2, 0.0))
-    p_core = ph * P0  # dimensional pressure at core nodes
+    p_core = P_CAP * P0  # dimensional pressure at core nodes
 
     # Helper: embed core pressure p_core(s) → p(x) on extended window (zero outside |X|<=1)
     def embed_p(p_core_vec):
@@ -749,12 +866,12 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             if Wh_sub > 1e-18:
                 s_relax_raw = Wh_target / (Wh_sub + 1e-30)
                 # Limit how much we scale in one go to avoid explosions
-                s_relax = np.clip(s_relax_raw, 0.25, 4.0)
+                s_relax = np.clip(s_relax_raw, 0.15, 5.0)
                 P_new *= s_relax
                 p_tmp = embed_p(P_new * ph)
 
         # ---- Relaxation of the ND pressure on core ----
-        P_old = p_core / ph  # previous ND pressure
+        P_old = p_core /ph   # previous ND pressure
         P_core_relaxed = (1.0 - relax_p) * P_old + relax_p * P_new
         # mild smoothing
         Ptmp = P_core_relaxed.copy()
@@ -765,7 +882,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         P_core_relaxed[0]  = 0.0
         P_core_relaxed[-1] = 0.0
 
-        p_core = P_core_relaxed * ph
+        p_core = P_core_relaxed *ph
         p_prev = embed_p(p_core).copy()
 
         # ---- Update film with elasticity at the *current* pressure ----
@@ -787,7 +904,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     Ve,         # entrainment speed at this angle
     R,          # effective radius at this angle
     sigma=sigma_combined,     # combined roughness
-    hardness_GPa=7.0          # case-hardened 16MnCr5 / 100Cr6
+    hardness_GPa=6          # case-hardened 16MnCr5 / 100Cr6
    )
     Wa_final = np.trapezoid(p_asp_final, x) * L
 
@@ -805,7 +922,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
 # Patir–Cheng shear flow factor acting on Couette shear
     phi_s_wall = phi_s_func(h, sigma=sigma_combined)
-    tau_c  = np.where(h > 1e-12, phi_s_wall * eta_w_sh * Vs / h, 0.0)
+    tau_c  = np.where(h > 1e-12, phi_s_wall * eta_w_sh * np.abs(Vs) / h, 0.0)
 
     tau_p  = 0.5 * h * dpdx
     tau_tot = tau_c + tau_p
@@ -1023,15 +1140,15 @@ SHOW_PLOTS = True
 PLOT_CTRL = {
     "profiles_x": {
         "pressure": {
-            "ENABLE": True,
-            "surface_state": 1,       # 0=UN, 1=TEXTURED, 2=BOTH
+            "ENABLE": False,
+            "surface_state": 0,       # 0=UN, 1=TEXTURED, 2=BOTH
             "angles_deg": [7],
             "rpms": [300],
             "texture_densities": [5],
         },
         "film": {
-            "ENABLE": True,
-            "surface_state": 1,
+            "ENABLE": False,
+            "surface_state": 0,
             "angles_deg": [7],
             "rpms": [300],
             "texture_densities": [5],
@@ -1053,14 +1170,14 @@ PLOT_CTRL = {
             "sigma_values": None,    # None → use base sigma_combined
         },
         "Fh": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
             "sigma_values": None,
         },
         "Fb": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
@@ -1076,10 +1193,10 @@ PLOT_CTRL = {
     },
     "avg_torque_untextured": {
         "ENABLE": False,
-        "rpms": [300, 500, 700, 900],
+        "rpms": [300],
     },
     "avg_torque_reduction": {
-        "ENABLE": False,
+        "ENABLE": True,
         "rpms": [ 300],
         "texture_densities": [5],
     },
