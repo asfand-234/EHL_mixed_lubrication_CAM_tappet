@@ -1,4 +1,3 @@
-
 # ============================================================
 import os
 import numpy as np
@@ -49,19 +48,19 @@ delta    = 1.77e-3      # preload [m]
 Meq      = 0.05733      # equivalent mass [kg]
 L        = 7.2e-3       # out-of-plane length [m]
 E_star   = 217e9        # [Pa]
-E_eff   = 1
+
 # ============================================================
 # Temperature-dependent parameter tables
 # ============================================================
 ETA0_TABLE     = {60: 0.04496, 90: 0.01381, 110: 0.008155}    # Pa·s
-ALPHA0_TABLE   = {60: 21e-9,   90: 16e-9,    110: 13e-9}      # Pa^-1
-RHO0_TABLE     = {60: 887.0,   90: 858.44,   110: 840.0}      # kg/m^3
-MU_B_TABLE     = {60: 0.12,    90: 0.12,     110: 0.12}
-GAMMA_LIM_TABLE= {60: 0.07,    90: 0.07,     110: 0.06}       # 1/Pa
-LAM_C_TABLE    = {60: 3.5e-6,  90: 3.0e-6,   110: 2.0e-6}
-N_C_TABLE      = {60: 0.85,    90: 0.65,     110: 0.52}
-PHI_IN_TABLE   = {60: 0.6,     90: 0.60,     110: 0.7}
-ETA_INF_TABLE  = {60: 0.020,   90: 0.006,    110: 0.004}
+ALPHA0_TABLE   = {60: 21e-9,   90: 16e-9,   110: 13e-9}       # Pa^-1
+RHO0_TABLE     = {60: 887.0,   90: 858.44,  110: 840.0}       # kg/m^3
+MU_B_TABLE     = {60: 0.12,    90: 0.12,    110: 0.12}
+GAMMA_LIM_TABLE= {60: 0.07,    90: 0.07,    110: 0.06}        # 1/Pa
+LAM_C_TABLE    = {60: 3.5e-6,  90: 3.0e-6,  110: 2.0e-6}
+N_C_TABLE      = {60: 0.85,    90: 0.65,    110: 0.52}
+PHI_IN_TABLE   = {60: 0.6,     90: 0.60,    110: 0.7}
+ETA_INF_TABLE  = {60: 0.020,   90: 0.006,   110: 0.004}
 
 BETA0_CONST    = 0.68
 P0_HOUPERT     = 1.98e8
@@ -70,6 +69,45 @@ T_SHIFT        = 138.0
 
 K_THERM_TABLE  = {60: 0.10, 90: 0.14, 110: 0.14}
 GAMMA_TH_TABLE = {60: 3.5e-4, 90: 4.5e-4, 110: 6.5e-4}
+
+# ============================================================
+# E_eff tables: function of temperature, rpm, texture area density
+# Temperatures: 90°C and 110°C
+# RPMs: 300, 500, 700, 900
+# Texture area densities: "5%", "8%", "10%"
+# All initial values set to 1.0 (user can edit later)
+# ============================================================
+E_EFF_TABLE = {
+    90: {
+        300: {"5%": 1.4, "8%": 1.9, "10%": 0.1},
+        500: {"5%": 3, "8%": 2.3, "10%": 4},
+        700: {"5%": 2.8, "8%": 2.2, "10%": 0.05},
+        900: {"5%": 2.3, "8%": 5, "10%": 1.5},
+    },
+    110: {
+        300: {"5%": 1.0, "8%": 1.0, "10%": 1.0},
+        500: {"5%": 1.0, "8%": 1.0, "10%": 1.0},
+        700: {"5%": 1.0, "8%": 1.0, "10%": 1.0},
+        900: {"5%": 1.0, "8%": 1.0, "10%": 1.0},
+    },
+}
+
+def get_E_eff(temp_c, rpm, tex_key):
+    """
+    Get E_eff multiplier for given temperature [°C], rpm, and texture key ("5%", "8%", "10%").
+    If (T, rpm, tex_key) not tabulated → returns 1.0.
+    """
+    try:
+        temp_table = E_EFF_TABLE.get(int(temp_c))
+        if temp_table is None:
+            return 1.0
+        rpm_int = int(round(float(rpm)))
+        rpm_row = temp_table.get(rpm_int)
+        if rpm_row is None:
+            return 1.0
+        return float(rpm_row.get(tex_key, 1.0))
+    except Exception:
+        return 1.0
 
 if TEMP_C not in (60, 90, 110):
     raise ValueError("TEMP_C must be one of {60, 90, 110}.")
@@ -400,7 +438,6 @@ def central_film_thickness(R, W, Ve):
     W_star = W / (E_star * L * R + 1e-30)
     hc = 3.06 * (U**0.69) * (G**0.56) * (W_star**-0.1) * R
     return float(np.clip(hc, 5e-9, 600e-9))
-
 # ============================================================
 # KINEMATICS (lift smoothing, curvature, speeds, load)
 # ============================================================
@@ -411,7 +448,7 @@ def kin_arrays(rpm):
     Vc = (rb + lift + d2lift_s ) * w
     Ve = 0.5 * (Vc + Vf)
     Vs = Vc - Vf
-   
+
     W = k_spring * (lift + delta) + (Meq * (w**2) * d2lift_s)
     return R, Ve, Vs, W, w
 
@@ -476,7 +513,7 @@ def rusanov_dqdx_bc(q, dx, q_in_left, q_in_right, alpha=1.0):
 w_texture = 35e-6       # [m]
 g_val     = 1e-9        # [m]
 x_start   = 0.0
-X_in, X_out = -3.5, 2.5
+X_in, X_out = -35,2.5
 
 D_TEXTURE = {"5%": 700e-6, "8%": 430.5e-6, "10%": 350e-6}
 A_TEXTURE_CONST = 4e-6
@@ -489,14 +526,34 @@ def integrate_shift(Vf, w):
     shift[1:] = np.cumsum(0.5*(integrand[1:] + integrand[:-1])*dtheta[1:])
     return shift
 
-def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture):
+def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture, rpm, temp_c=TEMP_C):
+    """
+    Textured film contribution h_tex(x) with E_eff taken from a table
+    indexed by (temp_c, rpm, texture area density).
+
+    The texture area density key ("5%", "8%", "10%") is inferred from
+    the passed d_texture by matching against D_TEXTURE values.
+    """
     if atex_theta <= 0.0 or a_theta <= 0.0:
         return np.zeros_like(x)
+
+    # Infer texture area density key from d_texture
+    tex_key = None
+    for k, v in D_TEXTURE.items():
+        if np.isclose(v, d_texture, rtol=0.0, atol=1e-9):
+            tex_key = k
+            break
+
+    # Get E_eff from table; default 1.0 if not found
+    if tex_key is not None:
+        E_eff_local = get_E_eff(temp_c, rpm, tex_key)
+    else:
+        E_eff_local = 1.0
 
     # Periodic pocket centers with pitch d_texture
     u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
     expo = np.log(g_val / atex_theta) * (u**2) / (w_texture**2 + 1e-30)
-    h = E_eff*atex_theta * np.exp(expo)
+    h = E_eff_local * atex_theta * np.exp(expo)
 
     return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
 
@@ -674,8 +731,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
     # ---------------- Base seeds ----------------
     h0   = central_film_thickness(R, W, Ve)     # Hamrock–Dowson central film
-    htex = htex_profile(x, a, atex_theta, shift_theta, d_texture)
-
+    htex = htex_profile(x, a, atex_theta, shift_theta, d_texture, rpm, TEMP_C)
 
     # Initial film guess (parabolic geometry + texture, no deflection yet)
     h = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
@@ -757,7 +813,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         )
         D_full = np.clip(D_full, 0.0, D_cap)
 
-                # Advected mass is ρ h θ
+        # Advected mass is ρ h θ
         q = rho_dim * np.maximum(h_nom, 1e-12) * theta
 
         # --- Patir–Cheng shear flow factor in the mass flux ---
@@ -892,11 +948,11 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
     # ---------------- Final fields on extended window ----------------
     p = embed_p(p_core)
-    defl_final = elastic_deflection(x, p)
-    h = np.maximum(h0 + x**2 / (2.0 * R) + defl_final + htex, h_floor)
+
+    h = np.maximum(h0 + x**2 / (2.0 * R) + defl + htex, h_floor)
 
 
-# Mixed load split: Zhao/Masjedi asperity + hydrodynamic (no extra scaling)
+    # Mixed load split: Zhao/Masjedi asperity + hydrodynamic (no extra scaling)
     p_asp_final = asperity_pressure_zhao_masjedi(
     h,          # local film
     x,          # grid
@@ -918,9 +974,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     gdot_wall = np.minimum(gdot_wall, gdot_max)
     eta_w_sh  = eta_carreau(eta_w, h, gdot_wall)
 
-    eta_w_sh  = eta_carreau(eta_w, h, gdot_wall)
-
-# Patir–Cheng shear flow factor acting on Couette shear
+    # Patir–Cheng shear flow factor acting on Couette shear
     phi_s_wall = phi_s_func(h, sigma=sigma_combined)
     tau_c  = np.where(h > 1e-12, phi_s_wall * eta_w_sh * np.abs(Vs) / h, 0.0)
 
@@ -1147,7 +1201,7 @@ PLOT_CTRL = {
             "texture_densities": [5],
         },
         "film": {
-            "ENABLE": False,
+            "ENABLE":False,
             "surface_state": 0,
             "angles_deg": [7],
             "rpms": [300],
@@ -1156,7 +1210,7 @@ PLOT_CTRL = {
         "asperity": {
             "ENABLE": False,
             "surface_state": 0,
-            "angles_deg": [5.0],
+            "angles_deg": [7],
             "rpms": [300],
             "texture_densities": [8],
         },
@@ -1560,4 +1614,3 @@ if __name__ == "__main__":
     run_plots()
     if SHOW_PLOTS:
         plt.show()
-
