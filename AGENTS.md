@@ -2,9 +2,13 @@ Read the text file "symbolic_data.txt". It is data having first two columns are 
 And third column is dependent variable (E).
 
 TASK:
-Your task is to optimze a simple analytic formula for E; 
-E ≈ a + b * exp(-c * F) + d * exp(-e * S)
-a, b, c, d, e = -0.57121192, 0.94495082, 0.11055355, 3.69613574, 0.53906929
+Your task is to optimze a symbolic regression analytic formula for E; 
+ E = a + b * exp(-c * F) + d * exp(-e * S)
+a = -0.98533203
+    b = 1.4659994
+    c = 0.07806862
+    d = 3.18598295
+    e = 0.8015496
 using only a restricted set of mathematical operators.The current model gives large error. Optimize/improve it by incorporating below given mathematical symbols if needed to enhance accurate upto 90%.
 
 HARD STRICT RULES:
