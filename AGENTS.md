@@ -4,7 +4,7 @@ And third column is dependent variable (E).
 TASK:
 Your task is to create a simple analytic formula for a scalar function y=f(x1,x2, x3) through symbolic regression
 using only a restricted set of mathematical operators.
-
+FOLLOW ALL BELOW 10 STEPS.
 IMPLEMENTATION STRATEGY:
 1) READ Input data
 Receive a table of input variables (x1, x2, …, xn) and target y.
@@ -86,15 +86,13 @@ Collect all candidate formulas from steps 3–9.
 
 Compute their data-fitting error and their description complexity.
 
-Choose the simplest expression that fits within the required accuracy.v
-HARD STRICT RULES:
-I want a formula for E(S, L,F) that is:
- - built only from +, -, *, /, exp(), log(), and powers with small integer exponents.
-- DO NOT generate radial basis functions, splines, neural networks, or high-degree polynomials.
+Choose the simplest expression that fits within the required accuracy.
 
-- prioritize interpretability and simplicity but maintain perfect accuracy.
-4) Try to not make it very long or very complex.
-5) The accuracy must be upto 90%
+HARD STRICT RULES:
+1) DO NOT generate radial basis functions, splines, neural networks, or high-degree polynomials.
+2) prioritize interpretability and simplicity but maintain perfect accuracy.
+3) Try to not make it very long or very complex.
+4) The accuracy must be upto 90%
 
 TESTING CRITERIA:
 Once the symbolic expression created then put every value of S, L, and F from data and verify the accuracy of E with respect to original data upto 90%. If achieved then generate only the final mathematical expression to me. If error is greater then keep optimizing the model and keep reducing error.
