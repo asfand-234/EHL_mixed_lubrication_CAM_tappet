@@ -21,7 +21,7 @@ Your Task is to reduce the terms of polynomial and its complexity to a maximum l
 HARD STRICT RULES:
 
 1)  Prioritize interpretability and simplicity but maintain perfect accuracy.
-3) The accuracy must be upto 80% of each cell data.
-
+2) The accuracy must be upto 80% of each cell data.
+3) Do not only calculate overall R^2, but also verify every time by putting S and F in equation and find error between predicted E and actual E. If error greater than re-optimize the equations. Fhe accuracy for each value of E should be above 80%
 TESTING CRITERIA:
 Once fitted equation achieved then put each value of S and F and calculate E and compare it with original each data of E if error is greater then optimize the polynomial equation to highest extend. Once accuracy achieved then generate only the optimized fitted equation for me in commit.
