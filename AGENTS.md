@@ -1,6 +1,6 @@
 Read the text file "symbolic_data.txt". It is data having first three columns are  independent variables (S, L and F).
 And third column is dependent variable (E).
-
+***TO ACHIEVE THIS TASK YOU HAVE NO TIME LIMIT. TAKE YOUR TIME AS MUCH YOU NEED. KEEP OPTIMIZING AND KEEP ITERATING UNTIL YOU MEET ACCURACY***
 TASK:
 Your task is to create three simple analytic formulas for y1, y2 and y3 through below implementaton criteria steps.
 
