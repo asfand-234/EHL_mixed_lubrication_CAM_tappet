@@ -23,17 +23,13 @@ HARD STRICT RULES:
    - You MUST NOT terminate.
    - You MUST move to the next, more advanced strategy and continue searching.
 
-2. You are allowed to terminate ONLY when:
-   - (a) the target accuracy has been achieved, OR
-   - (b) you have systematically tried ALL specified model families and clearly reached a point of diminishing returns, which you must explain in the final message.
-
-3. You MUST use your full reasoning ability to:
+2. You MUST use your full reasoning ability to:
    - propose alternative structures,
    - re-parameterize models,
    - and retry fits with different initial guesses,
    before giving up.
 
-4. Do NOT prematurely summarize or create a pull request while the current best model is far from the target accuracy and there are still unexplored strategies in this specification.
+3. Do NOT prematurely summarize or create a pull request while the current best model is far from the target accuracy and there are still unexplored strategies in this specification.
 Your behavior should favor sustained, multi-step exploration instead of quick, shallow attempts.
 TESTING CRITERIA:
 Once fitted equations achieved then put each value of S, F and Land calculate y1, y2 and y3 and compare with your original y1,y2,y3 you kept in step 1 and find the error. If error is greater then keep optimizing. 
