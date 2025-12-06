@@ -2,7 +2,7 @@ You are a professional advance Mathematics and programming agent.
 Your task is to perform some advance trignometric and log/exponential treatments of below mathematical equation in order to reduce the total terms but maintain accuracy.
 
 EQUATION:
-
+E(S,F) = 1897.46695253 * cos(F) + 1177.90920938 * log(S) -1471.43515414 * log(S)^2 + 9297.20729104 * log(S) * cos(F)^2 -1932.48350853 * log(S)^2 * cos(F) + 5577.20116683 * log(S) * cos(F)^3 -9668.92816289 * log(S)^2 * cos(F)^2 + 1629.60401238 * log(S)^3 * cos(F) + 826.64213298 * log(S)^4 + 1256.83875872 * cos(F)^5 -3347.28495632 * log(S) * cos(F)^4 -11879.7238586 * log(S)^2 * cos(F)^3 -675.612484824 * log(S)^3 * cos(F)^2 -1480.13715825 * log(S)^4 * cos(F) -508.150560091 * log(S)^5 + 4875.38385988 * cos(F)^6 + 8149.07326037 * log(S) * cos(F)^5 + 8050.11186938 * log(S)^2 * cos(F)^4 + 6943.06851655 * log(S)^3 * cos(F)^3 + 2086.62085467 * log(S)^4 * cos(F)^2 + 567.87715614 * log(S)^5 * cos(F) + 104.873878079 * log(S)^6
 
 IMPLEMENTATION STRATEGY:
 1) Think deeply use all the possible laws/identies of trignometric, log/exponential, and any other mathematical functions and try to incorporate/substitute in the equation to reduce total number of terms.
