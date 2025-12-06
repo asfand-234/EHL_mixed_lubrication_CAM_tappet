@@ -10,6 +10,9 @@ IMPLEMENTATION STRATEGY:
 3) after every step your must calculate predicted value of E and compare with its actual value of E from text file data named "symbolic_data.txt". 
 If the accuracy of each value is above 80% then accept that change else move to next approach and keep optimizing.
 
+HARD STRICT RULE:
+Do not create polynomial equation. Your task is to perform mathematical treatements on above equations to reduce the maximum number of terms like deriving a mathematical formula.
+
 TESTING & ACCEPTANCE CRITERIA:
 Once equation achieved then must put every value of S and F from data file and calculate each predicted E and see if error greater then keep optimizing. 
 Once achieved accuracy for all values then provide only the final equation to me in commit
