@@ -1,7 +1,12 @@
-I have attached a data file. In which first two columns S and F are input variables and Third column E is output. 
-Your task is to first perform some iterations deeply and generate an vest analytical formula using mathematical functions exp, log, power of integers/fractions, sqrt, sine/cose etc that best suitable for it with some constants (try to keep less than 5). 
+Read the text file "symbolic_data.txt". It is data having first two columns are  independent variables (S, F).
+And third column is dependent variable (E).
 
-Then generate a detailed advanced error free MATLAB code that load same data file and having the equation you first guess and perform advance iterations to predict best values of all constants such that the accuracy of every predicted value E must remain above 80% with respect to original E value. 
+I want to get a perfect analytical formula for E but the issue is E trend is very irregular. 
 
+Your task is to first split the E data into y1, y2, y3 and if required y4 (not more than y4). In such a way that the product of y1*y2*y3*y4 must be equal to E. 
+First using initial guesses and without any treatment just split E into Y columns. 
+Then visualize and analyze the trend of each vs with either S or F or both (whatever more suitable) and using any mathematical functions like ex0, log, sqrt, power of integers/fractions, cose/sin, hyperbolic functions etc. etc. And fit an analytical formula for each Y. 
 
-But before generating MATLAB code, you must have to perform many mathematical treatments by hit and trial and perfrom many iterations so that you must 100% get sure that finding optimum values of these constants would must give every E values 80%+ accurate.
+After fitting suitable formulas calculated predicted Y. Every value of The predicted Y must be 90% accurate with respect to your original Y value of each formula. 
+If error is greater then move back to step 1 and manually tune different values in each y1, y2, y3 or y4 whever suitable. Keep adjusting values until all the y functions get a suitable trend shape. But during adjusting Y values this make sure their product must be equal to 100% E value.
+Once all Y gets proper trends and for all Y you get a suitable analytical formula and all predicted Y values are 90% above accurate then provide me only all Y original data and Y formulas.
