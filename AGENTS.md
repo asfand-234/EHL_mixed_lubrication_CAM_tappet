@@ -2,17 +2,43 @@ Read the text file "symbolic_data.txt". It is data having first two columns are 
 And third column is dependent variable (E).
 
 TASK:
-Your task is to model the dimensionless correction factor E(S, F) :
+import numpy as np
 
-def E_model(S_val, F_val):
-    """Callable model with the fitted constants embedded."""
-    S0, F0, a, b, c, p = params
-    dS_val = np.asarray(S_val) / S0 - 1.0
-    dF_val = np.asarray(F_val) / F0 - 1.0
-    Q_val = a * dS_val ** 2 + b * dF_val ** 2 + c * dS_val * dF_val
-    Q_val = np.maximum(Q_val, 1e-12)
-    return np.exp(-(np.abs(Q_val) ** p))
-S0=2.2540050844, F0=4.0902888336, a=0.0006811763, b=0.0069066459, c=0.0036143950, p=0.0527759716
+# 12-component reference model (your current E_model)
+_COMPONENTS = np.array([...])  # as given
+
+def E_full(S, F):
+    S = np.asarray(S, float)
+    F = np.asarray(F, float)
+    acc = np.zeros_like(np.broadcast_to(S, np.broadcast(S, F).shape))
+    for S0, F0, wS, wF, A in _COMPONENTS:
+        acc += A * np.exp(-(((S - S0)/wS)**2 + ((F - F0)/wF)**2))
+    return np.clip(acc, 0.0, 1.2)  # or clip to [0,1] if you prefer
+
+def E_approx(S, F, A, S0, F0, wS, wF, p):
+    r2 = ((S - S0)/wS)**2 + ((F - F0)/wF)**2
+    return A * np.exp(-(r2**p))
+Fit the 6-parameter analytic model E_approx(S, F, A, S0, F0, wS, wF, p) to approximate
+the existing 12-component model E_full(S, F).
+
+1. Sample a grid of S and F values that cover the full range of _COMPONENTS coordinates,
+   e.g. S in [min(S0_k) - 1, max(S0_k) + 1], F in [min(F0_k) - 1, max(F0_k) + 1].
+2. For each grid point, compute E_full(S,F).
+3. Minimize the mean squared error between E_approx(S,F,...) and E_full(S,F) over this grid.
+4. Use the following initial guesses:
+   A = 1.0
+   S0 = 6.4
+   F0 = 2.5
+   wS = 3.0
+   wF = 1.5
+   p  = 1.7
+5. Constrain:
+   A in (0, 1.2], wS>0, wF>0, p>=1.
+
+Return:
+- The fitted parameter values,
+- The mean squared error, max absolute error,
+- And a final Python function E_approx_model(S, F) with constants embedded.
 
 **Constraints:**
 - First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But **Do Not generate polynomial, Inverse distance weighting type,Radial Basis function or Neural base network. It must remain analytical**
