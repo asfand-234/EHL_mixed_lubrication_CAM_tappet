@@ -15,7 +15,7 @@ def E_model(S_val, F_val):
 FITTED_CONSTANTS = {'S0': 1.0701842975339357, 'F0': 1.5008212747795073, 'a': 3.0946564281033835, 'b': 194.63870674551953, 'c': -
 49.08742925850819, 'p': 0.2031936188516285}
 Constraints:
-- First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But **Do Not generate polynomial, Radial Basis function or Neural base network. It must remain analytical**
+- First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But **Do Not generate polynomial, Inverse distance weighting type,Radial Basis function or Neural base network. It must remain analytical**
 - Report the fitted constants, R^2, max absolute error, and a Python function E_model(S,F) with these constants embedded.
 
 TESTING CRITERIA:
