@@ -13,14 +13,19 @@ Define
 Then
     E(S, F) = exp( - Q**p )
 
-Constants to identify:
-    S0 > 0, F0 > 0, a > 0, b > 0, p >= 1  (and optionally c)
+Constants to identify: (Base values)
+    S0=0.9789094226930794,
+        F0=3.086002870269579,
+        a=0.06672357678275997,
+        b=30.3614814454927,
+        c=3.777309543954021,
+        p=1.0,
 
 Given the dataset of (S, F, E) values, find numerical values of S0, F0, a, b, (c,) and p that minimize
     sum_i ( E_i - E(S_i, F_i) )^2
 
 Constraints:
-- Do not change the model form.
+- First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But *Avoid* polynomial and Radial basis functions.
 - Keep all constants in a physically reasonable range.
 - Report the fitted constants, R^2, max absolute error, and a Python function E_model(S,F) with these constants embedded.
 
