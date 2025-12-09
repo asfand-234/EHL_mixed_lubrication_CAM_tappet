@@ -14,6 +14,7 @@ where w is a constant gaussian width.
 TESTING CRITERIA:
 1) You must find error between each value of E. And error must be less than 20% for each value of E. 
 Must check and verify each value of predicted E before commiting, else keep optimizing and improving function
-2) Try to make the gaussian model simple and with less constants. To achieve reduce the accuracy from 100% to 80%. But not below 80% for each value of E.
-3) E must not be input variable in formula. As E is dependent variable.
-4) Once target achieved then provide precisely the final model in commit with neccessary explanations.
+2)Do not generate radial basis functions (RBF). Try the baseline above model and keep optiming its constants, mathematical functioms etc.
+3) Try to make the gaussian model simple and with less constants. To achieve reduce the accuracy from 100% to 80%. But not below 80% for each value of E.
+4) E must not be input variable in formula. As E is dependent variable.
+5) Once target achieved then provide precisely the final model in commit with neccessary explanations.
