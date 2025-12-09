@@ -4,26 +4,16 @@ And third column is dependent variable (E).
 TASK:
 We model the dimensionless correction factor E(S, F) using the fixed form:
 
-Let
-    dS = S / S0 - 1.0
-    dF = F / F0 - 1.0
-
-Define
-    Q = a * dS**2 + b * dF**2          # or Q = a*dS**2 + b*dF**2 + c*dS*dF if using cross term
-Then
-    E(S, F) = exp( - Q**p )
-
-Constants to identify: (Base values)
-    S0=0.9789094226930794,
-        F0=3.086002870269579,
-        a=0.06672357678275997,
-        b=30.3614814454927,
-        c=3.777309543954021,
-        p=1.0,
-
-Given the dataset of (S, F, E) values, find numerical values of S0, F0, a, b, (c,) and p that minimize
-    sum_i ( E_i - E(S_i, F_i) )^2
-
+def E_model(S_val, F_val):
+    """Callable model with the fitted constants embedded."""
+    S0, F0, a, b, c, p = params
+    dS_val = np.asarray(S_val) / S0 - 1.0
+    dF_val = np.asarray(F_val) / F0 - 1.0
+    Q_val = a * dS_val ** 2 + b * dF_val ** 2 + c * dS_val * dF_val
+    Q_val = np.maximum(Q_val, 1e-12)
+    return np.exp(-(np.abs(Q_val) ** p))
+FITTED_CONSTANTS = {'S0': 1.0701842975339357, 'F0': 1.5008212747795073, 'a': 3.0946564281033835, 'b': 194.63870674551953, 'c': -
+49.08742925850819, 'p': 0.2031936188516285}
 Constraints:
 - First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But **Do Not generate polynomial, Radial Basis function or Neural base network. It must remain analytical**
 - Report the fitted constants, R^2, max absolute error, and a Python function E_model(S,F) with these constants embedded.
