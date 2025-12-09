@@ -25,8 +25,7 @@ Given the dataset of (S, F, E) values, find numerical values of S0, F0, a, b, (c
     sum_i ( E_i - E(S_i, F_i) )^2
 
 Constraints:
-- First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But *Avoid* polynomial and Radial basis functions.
-- Keep all constants in a physically reasonable range.
+- First optimize the constants. If still error remain greater then add or modify the model with mathematica functions and constants. But *Do Not generate polynomial, Radial Basis function or Neural base network. It must remain analytical.**
 - Report the fitted constants, R^2, max absolute error, and a Python function E_model(S,F) with these constants embedded.
 
 TESTING CRITERIA:
