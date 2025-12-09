@@ -4,9 +4,7 @@ And cam lift data "updated_lift.txt"
 TASK:
 Step 1) Your task is to Run the script and print the percentage of average friction torque reduction for only 300 RPM at 90°C and at 10% texture density and for only cam left flank angles (-30° to -51) and cam nose angles (-12° to 12°) only.
 The percetange of averaged friction torque reduction must be printed per angles from above two sets.
-Step 2) Then analyze wether the percetange of friction torque reduction of cam flank angle is negative and of cam nose region angles are positive or not? Negative means the friction is increasing. If percentage is not negative at cam flak angles then move to step 3.
-
-Step 3) Deep research from standard relevant web research articles and find the mistakes in physics especially in Reynolds solver section, film thickness, hydrodynamic and asperity load etc. And find the true physics base issues and fix it and re-print results. Keep optimizing until you meet the target.
+Step 2) Then analyze wether the percetange of friction torque reduction of cam flank angle is negative and of cam nose region angles are positive or not? Negative means the friction is increasing. If percentage is not negative at cam flak angles then Deep research from standard relevant web research articles and find the mistakes in physics especially in Reynolds solver section, film thickness, hydrodynamic and asperity load etc. And find the true physics base issues and fix it and re-print results. Keep optimizing until you meet the target.
 
 *CONSTRAINTS*
 1) Do not add any non-physical or non-logical clipping/clamps, conditions or constraints inside any physics. Rather the work must be pure real physics base.
