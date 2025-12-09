@@ -5,12 +5,15 @@ TASK:
 
 Your task is to create a perfect Gaussian model for E as function of S and F.
 Try to start from this base line model. And keep adding necessary mathematical functions and optimizing constants to get accuracy.
+E = c1* exp(- ((S- c2)^2)/(c3*(w1)^2) - ((F- c4)^2)/(c5*(w2)^2))
 
-E = - exp((log(C1/C2)*(S^2 + F^2))/w^2)
+where c1,c2,c3,c4,c5 are constants to be determined.
+And w1 ,w2 are constants called gaussian widths to be determined.
 
 where w is a constant gaussian width.
 TESTING CRITERIA:
-1) Once model generated you must put each values of S and F and calculate predicted E and compare it with original E.
+1) You must find error between each value of E. And error must be less than 20% for each value of E. 
+Must check and verify each value of predicted E before commiting, else keep optimizing and improving function
 2) Try to make the gaussian model simple and with less constants. To achieve reduce the accuracy from 100% to 80%. But not below 80% for each value of E.
 3) E must not be input variable in formula. As E is dependent variable.
 4) Once target achieved then provide precisely the final model in commit with neccessary explanations.
