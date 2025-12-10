@@ -69,6 +69,175 @@ T_SHIFT        = 138.0
 K_THERM_TABLE  = {90: 0.11, 110: 0.14}
 GAMMA_TH_TABLE = {90: 4.5e-4, 110: 6.5e-4}
 
+# ============================================================
+# Gaussian RBF model parameters (imported from text file)
+# ============================================================
+RBF_DATA_FILE = os.path.join(DATA_DIR, "rbf_centers_weights.txt")
+
+RBF_SIGMA = 0.4
+RBF_TARGET_SCALE = 0.8
+
+# Will be populated once from the text file
+RBF_CENTERS = None   # shape (N, 2) → (S_i, F_i)
+RBF_WEIGHTS = None   # shape (N,)
+
+
+def _load_rbf_data():
+    """
+    Load RBF centres and weights from text file in the current folder.
+
+    This version assumes 'rbf_centers_weights.txt' is in the same
+    directory where you run the script / notebook.
+    It does NOT fall back silently: any problem raises RuntimeError.
+    """
+    global RBF_CENTERS, RBF_WEIGHTS
+
+    # Already loaded?
+    if (RBF_CENTERS is not None) and (RBF_WEIGHTS is not None):
+        return
+
+    try:
+        raw = np.loadtxt(RBF_DATA_FILE, comments="#")
+    except OSError as e:
+        raise RuntimeError(
+            f"Cannot open RBF data file '{RBF_DATA_FILE}': {e}"
+        )
+    except ValueError as e:
+        raise RuntimeError(
+            f"Cannot parse RBF data file '{RBF_DATA_FILE}': {e}"
+        )
+
+    if raw.ndim != 2 or raw.shape[1] < 4:
+        raise RuntimeError(
+            f"RBF data file '{RBF_DATA_FILE}' must have at least 4 columns "
+            f"(index, S_i, F_i, w_i)."
+        )
+
+    centres = raw[:, 1:3].astype(float)  # S_i, F_i
+    weights = raw[:, 3].astype(float)    # w_i
+
+    if centres.shape[0] != weights.shape[0]:
+        raise RuntimeError(
+            "RBF centres and weights length mismatch: "
+            f"{centres.shape[0]} vs {weights.shape[0]}"
+        )
+
+    RBF_CENTERS = centres
+    RBF_WEIGHTS = weights
+    # Optional debug:
+    # print(f"Loaded RBF data: {RBF_CENTERS.shape[0]} centres")
+
+
+def _rbf_predict_E(S_val, F_val):
+    """
+    Gaussian RBF prediction of E at a given (S, F):
+
+        E_pred(S,F) = TARGET_SCALE * sum_i w_i *
+                      exp(-((S-S_i)^2 + (F-F_i)^2)/(2 sigma^2))
+
+    This always uses the data from 'rbf_centers_weights.txt'.
+    """
+    _load_rbf_data()  # may raise RuntimeError if file/problem
+
+    vec = np.array([float(S_val), float(F_val)], dtype=float)  # (2,)
+    diff = RBF_CENTERS - vec                                   # (N, 2)
+    r2 = np.sum(diff * diff, axis=1)                          # (N,)
+    kernel = np.exp(-r2 / (2.0 * RBF_SIGMA * RBF_SIGMA))      # (N,)
+
+    return float(RBF_TARGET_SCALE * np.dot(kernel, RBF_WEIGHTS))
+
+
+# ============================================================
+# E_eff tables: ONLY (S, F) data vs (T, rpm, density)
+# Data correspond to rows in symbolic_data.txt
+# (Temperature 90/110 °C, rpm 300/500/700/900, density 5/8/10 %)
+# ============================================================
+E_EFF_TABLE = {
+    90: {
+        300: {
+            "5%":  {"S": 7.225, "F": 3.966},
+            "8%":  {"S": 7.225, "F": 2.436},
+            "10%": {"S": 7.225, "F": 2.040},
+        },
+        500: {
+            "5%":  {"S": 5.159, "F": 3.669},
+            "8%":  {"S": 5.159, "F": 2.254},
+            "10%": {"S": 5.159, "F": 1.887},
+        },
+        700: {
+            "5%":  {"S": 4.171, "F": 3.327},
+            "8%":  {"S": 4.171, "F": 2.044},
+            "10%": {"S": 4.171, "F": 1.711},
+        },
+        900: {
+            "5%":  {"S": 4.000, "F": 2.991},
+            "8%":  {"S": 4.000, "F": 1.837},
+            "10%": {"S": 4.000, "F": 1.538},
+        },
+    },
+    110: {
+        300: {
+            "5%":  {"S": 11.674, "F": 3.966},
+            "8%":  {"S": 11.674, "F": 2.436},
+            "10%": {"S": 11.674, "F": 2.040},
+        },
+        500: {
+            "5%":  {"S": 8.335, "F": 3.669},
+            "8%":  {"S": 8.335, "F": 2.254},
+            "10%": {"S": 8.335, "F": 1.887},
+        },
+        700: {
+            "5%":  {"S": 6.739, "F": 3.327},
+            "8%":  {"S": 6.739, "F": 2.044},
+            "10%": {"S": 6.739, "F": 1.711},
+        },
+        900: {
+            "5%":  {"S": 5.788, "F": 2.991},
+            "8%":  {"S": 5.788, "F": 1.837},
+            "10%": {"S": 5.788, "F": 1.538},
+        },
+    },
+}
+
+
+def get_E_eff(temp_c, rpm, tex_key):
+    """
+    Return E_eff for given temperature [°C], rpm, and texture key ("5%", "8%", "10%").
+
+    This version has no silent fallbacks:
+      - If (T, rpm, tex_key) is not found in E_EFF_TABLE → KeyError.
+      - If RBF file is missing or invalid → RuntimeError.
+      - Otherwise always uses the Gaussian RBF model on the corresponding (S, F).
+    """
+    # Normalise keys
+    temp_key = int(temp_c)
+    if temp_key not in E_EFF_TABLE:
+        raise KeyError(f"get_E_eff: unknown temperature key {temp_key} °C")
+
+    temp_table = E_EFF_TABLE[temp_key]
+
+    rpm_int = int(round(float(rpm)))
+    if rpm_int not in temp_table:
+        raise KeyError(
+            f"get_E_eff: unknown rpm {rpm_int} at T={temp_key} °C"
+        )
+
+    rpm_row = temp_table[rpm_int]
+
+    if tex_key not in rpm_row:
+        raise KeyError(
+            f"get_E_eff: unknown texture key '{tex_key}' at "
+            f"T={temp_key} °C, rpm={rpm_int}"
+        )
+
+    entry = rpm_row[tex_key]
+    S_val = entry["S"]
+    F_val = entry["F"]
+
+    # Always compute E from the Gaussian formula (no fallback to 1.0)
+    return _rbf_predict_E(S_val, F_val)
+
+
 if TEMP_C not in (90, 110):
     raise ValueError("TEMP_C must be one of {90, 110}.")
 
@@ -87,7 +256,7 @@ gamma_th  = GAMMA_TH_TABLE[TEMP_C]
 # ============================================================
 # Greenwood–Tripp constants
 # ============================================================
-sigma_combined = 0.30e-6
+sigma_combined = 0.45e-6
 beta_a         = sigma_combined/0.002
 eta_R          = (0.06/(sigma_combined*beta_a))
 def _F52_greenwood_tripp(lam):
@@ -442,18 +611,19 @@ def rusanov_dqdx_bc(q, dx, q_in_left, q_in_right, alpha=1.0):
     # Rusanov flux for f(q) = u*q
     F = 0.5*(qL + qR) - 0.5*alpha*(qR - qL)
     return (F[1:] - F[:-1])/(dx + 1e-30)
-
 # ============================================================
 # TEXTURE MODEL
 # ============================================================
-w_texture = 36.6e-6       # [m]
+w_texture = 35e-6       # [m]
 g_val     = 1e-9        # [m]
 x_start   = 0.0
 X_in, X_out = -3.5, 2.5
 
-D_TEXTURE = {"5%": 350e-6, "8%": 215e-6, "10%": 180e-6}
-A_TEXTURE_CONST = 6.5e-6
+D_TEXTURE = {"5%": 366e-6, "8%": 228e-6, "10%": 183e-6}
+A_TEXTURE_CONST = 4e-6
 TEXTURE_ZONE_MASK = np.ones_like(TH_DEG, dtype=bool)
+
+
 def integrate_shift(Vf, Ve, w):
     """
     Base cumulative texture shift along x as a function of cam angle.
@@ -483,22 +653,52 @@ def integrate_shift(Vf, Ve, w):
 
     return shift
 
-def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture, rpm=None, temp_c=TEMP_C):
- 
+
+def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture,
+                 rpm=None, temp_c=TEMP_C):
+    """
+    Textured film contribution h_tex(x).
+
+    For a given (temp_c, rpm, texture density), we:
+      1) infer the texture density key ("5%", "8%", "10%") from d_texture,
+      2) call get_E_eff(...) to compute E_pred(S,F) from the Gaussian RBF,
+      3) multiply the texture pocket profile by that E_pred.
+
+    This version has no fallback to E_eff = 1.0.
+    If rpm is None or d_texture does not match D_TEXTURE, it raises.
+    """
+    # If there is no texture amplitude or no contact patch → no texture
     if atex_theta <= 0.0 or a_theta <= 0.0:
         return np.zeros_like(x)
 
-    # Infer texture area density key from d_texture
+    # 1) Infer texture area density key from d_texture
     tex_key = None
     for k, v in D_TEXTURE.items():
         if np.isclose(v, d_texture, rtol=0.0, atol=1e-9):
             tex_key = k
             break
 
-   
-    # Periodic pocket centers with pitch d_texture
+    if tex_key is None:
+        raise ValueError(
+            f"htex_profile: d_texture={d_texture} does not match "
+            f"any known texture density in D_TEXTURE."
+        )
+
+    # 2) rpm must be provided when using Gaussian E_eff
+    if rpm is None:
+        raise ValueError(
+            "htex_profile: rpm must not be None when computing E_eff."
+        )
+
+    # Always get E_eff from Gaussian RBF model (no more fallback to 1.0)
+    E_eff_local = get_E_eff(temp_c, rpm, tex_key)
+
+    # 3) Texture pocket profile, scaled by E_eff_local
+    # Periodic pocket centres with pitch d_texture
     u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
     expo = np.log(g_val / atex_theta) * (u**2) / (w_texture**2 + 1e-30)
+
+    # Final textured contribution, scaled by E_eff_local
     h = atex_theta * np.exp(expo)
 
     return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
@@ -597,7 +797,7 @@ def phi_x_func(h, sigma=sigma_combined, gamma=1.0):
     # Keep φ_x in a moderate, positive range so D_full never collapses.
     # This is crucial to avoid flat-topped pressure while still
     # capturing roughness effects.
-    phi = np.clip(phi, 0.5, 1.4)
+    phi = np.clip(phi, 0.6, 1.4)
 
     return phi
 
@@ -647,8 +847,8 @@ def _clamp01(z):
 
 def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 atex_theta, shift_theta, d_texture,
-                Nx=171, iters=80, substep_cap=6, relax_p=0.75, relax_h=0.55,
-                M_core=301, observe=True):
+                Nx=171, iters=60, substep_cap=6, relax_p=0.75, relax_h=0.55,
+                M_core=301, observe=True, load_iters=3, load_tol=1e-3):
 
     CFL_TARGET = 0.4
     P_CAP = 2.5e9
@@ -687,7 +887,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
     # Initial pressure on core: Hertz-type ND seed, scaled by ph
     P0 = np.sqrt(np.maximum(1.0 - s**2, 0.0))
-    p_core = P_CAP * P0  # dimensional pressure at core nodes
+    p_core = ph * P0  # dimensional pressure at core nodes
 
     # Helper: embed core pressure p_core(s) → p(x) on extended window (zero outside |X|<=1)
     def embed_p(p_core_vec):
@@ -698,7 +898,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             p_full[inside] = p_vals
         return p_full
 
-    # Substep control (for advection CFL)
+ # Substep control (for advection CFL)
     u1_local = abs(Ve)
     cfl  = u1_local * dt / (dx + 1e-30)
     base_needed = int(max(2, np.ceil(cfl / CFL_TARGET)))
@@ -712,213 +912,242 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             batches = int(np.ceil(base_needed / max_substeps))
             total_substeps = batches * max_substeps
     total_substeps = max(total_substeps, 2)
-    dts  = dt / float(total_substeps)
+
+    # Rigid approach / film-offset iterated to enforce load balance
+    delta_h = 0.0
+    delta_hist = []
+    resid_hist = []
+
+    # Warm-start fields retained across load iterations
+    p_core_seed = p_core.copy()
+    h_nom_seed = h.copy()
+    theta_seed = np.ones_like(x)
+    p_asp_seed = np.zeros_like(x)
+
+    for _load in range(int(max(load_iters, 1))):
+        dts  = dt / float(total_substeps)
 
         # Previous pressure for dp/dt and film-fraction (Elrod–Adams)
-    p_prev = embed_p(p_core).copy()
-    theta  = np.ones_like(x)  # film fraction θ (1=full film, 0=cavitated)
-
-    # Rigid approach / film-offset (can later be iterated if you want)
-    delta_h = 0.0
-
-    # Asperity pressure from previous substep for total-pressure deflection
-    p_asp_prev = np.zeros_like(x)
-
-    # ------------- Substep loop (inner Reynolds + cavitation) -------------
-    for _sub in range(total_substeps):
-
-
-                # Current embedded pressure
-        p_embed = embed_p(p_core)
-
-        # Total pressure for deflection: hydrodynamic + asperity (from previous substep)
-        p_tot_for_defl = p_embed + p_asp_prev
-
-        # Elastic deflection under total pressure
-        defl_sub = elastic_deflection(x, p_tot_for_defl)
-
-        # Nominal film for Reynolds / rheology (geometry + deflection + texture - delta_h)
-        h_nom = np.maximum(h0 + x**2 / (2.0 * R) + defl_sub + htex - delta_h,
-                           h_floor)
-
-        dhdt  = (h_nom - h_nom_prev) / max(dts, 1e-12)
-        h_nom_prev = h_nom.copy()
-
-        # --- Rheology & density ---
-        eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h_nom, a)
-        rho_dim = rho_dowson_higginson(p_embed, dT_field)
-        drdp    = drho_dp_numeric(p_embed, dT_field, Ve, h_nom, a)
-        phi_x   = phi_x_func(h_nom)
-
-        # --- Effective viscosity for mobility (Carreau) ---
-        dpdx     = np.gradient(p_embed, x)
-        gdot_p   = np.abs(0.5 * np.maximum(h_nom, 1e-12) * np.abs(dpdx) / (eta_dim + 1e-30))
-        gdot_eff = np.sqrt(
-            (np.maximum(np.abs(Vs), 1e-6) / np.maximum(h_nom, 1e-12))**2
-            + gdot_p**2
-        )
-        gdot_eff = np.minimum(gdot_eff, gdot_max)  # clamp shear rate
-        eta_eff_Re = eta_carreau(eta_dim, h_nom, gdot_eff)
-
-        # --- Mass-conserving cavitation (Elrod–Adams) ---
-        theta = _clamp01(theta)
-
-        # Mobility D for ND operator (in terms of X = x/a, P = p/ph)
-        # We keep exactly your original scaling to preserve magnitudes:
-        # ∂X(D_full ∂X P) ≈ RHS_full, with P = p/ph.
-        D_full = (
-            phi_x * (h_nom**3) * rho_dim * ph * theta
-            / (12.0 * eta_eff_Re * (a**2) + 1e-30)
-        )
-        D_full = np.clip(D_full, 0.0, D_cap)
-
-        # Advected mass is ρ h θ
-        q = rho_dim * np.maximum(h_nom, 1e-12) * theta
-
-        # --- Patir–Cheng shear flow factor in the mass flux ---
-        # Cell-centre effective speed including roughness-modified sliding
-        phi_s_mass = phi_s_func(h_nom, sigma=sigma_combined)
-        u_cell = Ve + 0.5 * Vs * phi_s_mass     # length N_core array
-
-        # Convert to face-centred speeds for Rusanov (length N_core+1)
-        Nq = len(q)
-        u_face = np.empty(Nq + 1)
-        u_face[1:-1] = 0.5 * (u_cell[:-1] + u_cell[1:])  # interior faces
-        u_face[0] = u_cell[0]                            # left boundary face
-        u_face[-1] = u_cell[-1]                          # right boundary face
-        # ------------------------------------------------------
-
-        # Inflow states (full film at bulk density) for Rusanov
-        h_nom_seed = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
-        h_left, h_right = h_nom_seed[0], h_nom_seed[-1]
-
-        # Use Ve (scalar) to decide flow direction at the boundaries
-        if Ve >= 0.0:
-            q_in_left  = PHI_IN * rho0 * h_left * 1.0  # θ=1 at inlet
-            q_in_right = q[-1]
-        else:
-            q_in_left  = q[0]
-            q_in_right = PHI_IN * rho0 * h_right * 1.0
-
-        # Conservative advection of mass ρ h θ (Rusanov divergence)
-        term_adv = rusanov_div_bc(u_face, q, dx, q_in_left, q_in_right)
-
-
-        # Compressible squeeze with θ:
-        # ∂t(ρ h θ) = ρ θ ∂t h + h θ ∂ρ/∂p ∂t p
-        dpdt_embed   = (p_embed - p_prev) / max(dts, 1e-12)
-        term_squeeze = (rho_dim * theta * dhdt + h_nom * theta * drdp * dpdt_embed)
-        RHS_full = term_adv + term_squeeze
-
-        # Map to core (|X|<=1) and assemble diffusion operator on s-grid
-        D_core   = np.interp(xs, x, D_full)
-        RHS_core = np.interp(xs, x, RHS_full)
-
-        M = len(xs)
-        A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
-        invdS2 = 1.0 / (dS * dS + 1e-30)
-
-        # Boundary: P = 0 at X = ±1 (i.e. p = 0 there)
-        B[0] = 1.0; RHS[0] = 0.0
-        for j in range(1, M - 1):
-            Dw = 0.5 * (D_core[j] + D_core[j - 1])
-            De = 0.5 * (D_core[j] + D_core[j + 1])
-            A[j] = -Dw * invdS2
-            C[j] = -De * invdS2
-            B[j] = -(A[j] + C[j]) + 1e-12
-            RHS[j] = RHS_core[j]
-        B[M - 1] = 1.0; RHS[M - 1] = 0.0
-
-        # Thomas solve on core for P_new (non-dimensional)
-        # We solve A * (P_new) = RHS in ND form, then convert to dimensional p_core.
-        for j in range(1, M):
-            wfac = A[j] / (B[j - 1] + 1e-30)
-            B[j]   -= wfac * C[j - 1]
-            RHS[j] -= wfac * RHS[j - 1]
-        P_new = np.zeros(M)
-        P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
-        for j in range(M - 2, -1, -1):
-            P_new[j] = (RHS[j] - C[j] * P_new[j + 1]) / (B[j] + 1e-30)
-
-        # Non-negative pressure (Elrod–Adams)
-        P_new = np.maximum(P_new, 0.0)
-        p_tmp = embed_p(P_new * ph)  # dimensional p(x)
-        if P_CAP is not None:
-            p_tmp = np.minimum(p_tmp, P_CAP)
-            if ph > 0:
-                P_new = np.minimum(P_new, P_CAP / ph)
-
-        # ---- Elrod–Adams complementarity: θ update ----
-        full_mask = (p_tmp > 0.0)
-        cav_mask  = ~full_mask
-
-        theta[full_mask] = 1.0
-
-        # In cavitated zones (p=0): ∂t(ρ h θ) + ∂x(u ρ h θ) = 0
-        den_cav = (rho_dim[cav_mask] * np.maximum(h_nom[cav_mask], 1e-12) + 1e-30)
-        theta[cav_mask] = _clamp01(
-            theta[cav_mask]
-            - dts * (
-                term_adv[cav_mask] / den_cav
-                + theta[cav_mask] * (rho_dim[cav_mask] * dhdt[cav_mask]) / den_cav
-            )
-        )
-
-        # ---- Gentle hydrodynamic load relaxation (amplitude only) ----
-        # Use Greenwood–Tripp on *current h_nom* for asperity load; then adjust
-        # hydrodynamic pressure amplitude so (Wa + Wh) ≈ W without distorting shape.
-        p_asp_sub = asperity_pressure_zhao_masjedi(
-        np.maximum(h_nom, h_floor), x, W, Ve, R
-        )
-
-        Wa_sub = np.trapezoid(p_asp_sub, x) * L
-        Wh_sub = np.trapezoid(p_tmp, x) * L
-        total_load = Wa_sub + Wh_sub
-
-        if total_load > 1e-18:
-            # Target hydrodynamic load given asperity load
-            Wh_target = max(W - Wa_sub, 0.0)
-            if Wh_sub > 1e-18:
-                s_relax_raw = Wh_target / (Wh_sub + 1e-30)
-                # Limit how much we scale in one go to avoid explosions
-                s_relax = np.clip(s_relax_raw, 0.15, 5.0)
-                P_new *= s_relax
-                p_tmp = embed_p(P_new * ph)
-
-        # ---- Relaxation of the ND pressure on core ----
-        P_old = p_core /ph   # previous ND pressure
-        P_core_relaxed = (1.0 - relax_p) * P_old + relax_p * P_new
-        # mild smoothing
-        Ptmp = P_core_relaxed.copy()
-        if len(P_core_relaxed) >= 3:
-            P_core_relaxed[1:-1] = (
-                0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
-            )
-        P_core_relaxed[0]  = 0.0
-        P_core_relaxed[-1] = 0.0
-
-        p_core = P_core_relaxed *ph
+        p_core = p_core_seed.copy()
         p_prev = embed_p(p_core).copy()
+        theta  = theta_seed.copy()  # film fraction θ (1=full film, 0=cavitated)
 
-                # ---- Update film with elasticity at the *current* total pressure ----
-        p_tot_for_defl = p_prev + p_asp_prev
-        defl  = elastic_deflection(x, p_tot_for_defl)
-        h_candidate = np.maximum(
-            h0 + x**2 / (2.0 * R) + defl + htex - delta_h,
-            h_floor,
-        )
-        h = np.maximum(relax_h * h + (1.0 - relax_h) * h_candidate, h_floor)
+        # Asperity pressure from previous substep for total-pressure deflection
+        p_asp_prev = p_asp_seed.copy()
 
-        # Update asperity pressure for next substep (based on updated film)
-        p_asp_prev = asperity_pressure_zhao_masjedi(
+        # Nominal film used for squeeze derivative in first substep
+        h_nom_prev = h_nom_seed.copy()
+
+        defl_final = np.zeros_like(x)
+
+        # ------------- Substep loop (inner Reynolds + cavitation) -------------
+        for _sub in range(total_substeps):
+
+            # Current embedded pressure
+            p_embed = embed_p(p_core)
+
+            # Total pressure for deflection: hydrodynamic + asperity (from previous substep)
+            p_tot_for_defl = p_embed + p_asp_prev
+
+            # Elastic deflection under total pressure
+            defl_sub = elastic_deflection(x, p_tot_for_defl)
+
+            # Nominal film for Reynolds / rheology (geometry + deflection + texture - delta_h)
+            h_nom = np.maximum(h0 + x**2 / (2.0 * R) + defl_sub + htex - delta_h,
+                               h_floor)
+
+            dhdt  = (h_nom - h_nom_prev) / max(dts, 1e-12)
+            h_nom_prev = h_nom.copy()
+
+            # --- Rheology & density ---
+            eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h_nom, a)
+            rho_dim = rho_dowson_higginson(p_embed, dT_field)
+            drdp    = drho_dp_numeric(p_embed, dT_field, Ve, h_nom, a)
+            phi_x   = phi_x_func(h_nom)
+
+            # --- Effective viscosity for mobility (Carreau) ---
+            dpdx     = np.gradient(p_embed, x)
+            gdot_p   = np.abs(0.5 * np.maximum(h_nom, 1e-12) * np.abs(dpdx) / (eta_dim + 1e-30))
+            gdot_eff = np.sqrt(
+                (np.maximum(np.abs(Vs), 1e-6) / np.maximum(h_nom, 1e-12))**2
+                + gdot_p**2
+            )
+            gdot_eff = np.minimum(gdot_eff, gdot_max)  # clamp shear rate
+            eta_eff_Re = eta_carreau(eta_dim, h_nom, gdot_eff)
+
+            # --- Mass-conserving cavitation (Elrod–Adams) ---
+            theta = _clamp01(theta)
+
+            # Mobility D for ND operator (in terms of X = x/a, P = p/ph)
+            # We keep exactly your original scaling to preserve magnitudes:
+            # ∂X(D_full ∂X P) ≈ RHS_full, with P = p/ph.
+            D_full = (
+                phi_x * (h_nom**3) * rho_dim * ph * theta
+                / (12.0 * eta_eff_Re * (a**2) + 1e-30)
+            )
+            D_full = np.clip(D_full, 0.0, D_cap)
+
+            # Advected mass is ρ h θ
+            q = rho_dim * np.maximum(h_nom, 1e-12) * theta
+
+            # --- Patir–Cheng shear flow factor in the mass flux ---
+            # Cell-centre effective speed including roughness-modified sliding
+            phi_s_mass = phi_s_func(h_nom, sigma=sigma_combined)
+            u_cell = Ve + 0.5 * Vs * phi_s_mass     # length N_core array
+
+            # Convert to face-centred speeds for Rusanov (length N_core+1)
+            Nq = len(q)
+            u_face = np.empty(Nq + 1)
+            u_face[1:-1] = 0.5 * (u_cell[:-1] + u_cell[1:])  # interior faces
+            u_face[0] = u_cell[0]                            # left boundary face
+            u_face[-1] = u_cell[-1]                          # right boundary face
+            # ------------------------------------------------------
+
+            # Inflow states (full film at bulk density) for Rusanov
+            h_nom_seed = np.maximum(h0 + x**2 / (2.0 * R) + htex, h_floor)
+            h_left, h_right = h_nom_seed[0], h_nom_seed[-1]
+
+            # Use Ve (scalar) to decide flow direction at the boundaries
+            if Ve >= 0.0:
+                q_in_left  = PHI_IN * rho0 * h_left * 1.0  # θ=1 at inlet
+                q_in_right = q[-1]
+            else:
+                q_in_left  = q[0]
+                q_in_right = PHI_IN * rho0 * h_right * 1.0
+
+            # Conservative advection of mass ρ h θ (Rusanov divergence)
+            term_adv = rusanov_div_bc(u_face, q, dx, q_in_left, q_in_right)
+
+
+            # Compressible squeeze with θ:
+            # ∂t(ρ h θ) = ρ θ ∂t h + h θ ∂ρ/∂p ∂t p
+            dpdt_embed   = (p_embed - p_prev) / max(dts, 1e-12)
+            term_squeeze = (rho_dim * theta * dhdt + h_nom * theta * drdp * dpdt_embed)
+            RHS_full = term_adv + term_squeeze
+
+            # Map to core (|X|<=1) and assemble diffusion operator on s-grid
+            D_core   = np.interp(xs, x, D_full)
+            RHS_core = np.interp(xs, x, RHS_full)
+
+            M = len(xs)
+            A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
+            invdS2 = 1.0 / (dS * dS + 1e-30)
+
+            # Boundary: P = 0 at X = ±1 (i.e. p = 0 there)
+            B[0] = 1.0; RHS[0] = 0.0
+            for j in range(1, M - 1):
+                Dw = 0.5 * (D_core[j] + D_core[j - 1])
+                De = 0.5 * (D_core[j] + D_core[j + 1])
+                A[j] = -Dw * invdS2
+                C[j] = -De * invdS2
+                B[j] = -(A[j] + C[j]) + 1e-12
+                RHS[j] = RHS_core[j]
+            B[M - 1] = 1.0; RHS[M - 1] = 0.0
+
+            # Thomas solve on core for P_new (non-dimensional)
+            # We solve A * (P_new) = RHS in ND form, then convert to dimensional p_core.
+            for j in range(1, M):
+                wfac = A[j] / (B[j - 1] + 1e-30)
+                B[j]   -= wfac * C[j - 1]
+                RHS[j] -= wfac * RHS[j - 1]
+            P_new = np.zeros(M)
+            P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
+            for j in range(M - 2, -1, -1):
+                P_new[j] = (RHS[j] - C[j] * P_new[j + 1]) / (B[j] + 1e-30)
+
+            # Non-negative pressure (Elrod–Adams)
+            P_new = np.maximum(P_new, 0.0)
+            p_tmp = embed_p(P_new * ph)  # dimensional p(x)
+            if P_CAP is not None:
+                p_tmp = np.minimum(p_tmp, P_CAP)
+                if ph > 0:
+                    P_new = np.minimum(P_new, P_CAP / ph)
+
+            # ---- Elrod–Adams complementarity: θ update ----
+            full_mask = (p_tmp > 0.0)
+            cav_mask  = ~full_mask
+
+            theta[full_mask] = 1.0
+
+            # In cavitated zones (p=0): ∂t(ρ h θ) + ∂x(u ρ h θ) = 0
+            den_cav = (rho_dim[cav_mask] * np.maximum(h_nom[cav_mask], 1e-12) + 1e-30)
+            theta[cav_mask] = _clamp01(
+                theta[cav_mask]
+                - dts * (
+                    term_adv[cav_mask] / den_cav
+                    + theta[cav_mask] * (rho_dim[cav_mask] * dhdt[cav_mask]) / den_cav
+                )
+            )
+
+            # ---- Relaxation of the ND pressure on core ----
+            P_old = p_core /ph   # previous ND pressure
+            P_core_relaxed = (1.0 - relax_p) * P_old + relax_p * P_new
+            # mild smoothing
+            Ptmp = P_core_relaxed.copy()
+            if len(P_core_relaxed) >= 3:
+                P_core_relaxed[1:-1] = (
+                    0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
+                )
+            P_core_relaxed[0]  = 0.0
+            P_core_relaxed[-1] = 0.0
+
+            p_core = P_core_relaxed *ph
+            p_prev = embed_p(p_core).copy()
+
+            # ---- Update film with elasticity at the *current* total pressure ----
+            p_tot_for_defl = p_prev + p_asp_prev
+            defl  = elastic_deflection(x, p_tot_for_defl)
+            h_candidate = np.maximum(
+                h0 + x**2 / (2.0 * R) + defl + htex - delta_h,
+                h_floor,
+            )
+            h = np.maximum(relax_h * h + (1.0 - relax_h) * h_candidate, h_floor)
+
+            # Update asperity pressure for next substep (based on updated film)
+            p_asp_prev = asperity_pressure_zhao_masjedi(
+                h, x, W, Ve, R, sigma=sigma_combined, hardness_GPa=6.0
+            )
+
+            defl_final = defl.copy()
+
+        # retain seeds to warm-start next load loop
+        p_core_seed = p_core.copy()
+        p_asp_seed = p_asp_prev.copy()
+        h_nom_seed = h_nom.copy()
+        theta_seed = theta.copy()
+
+        p = embed_p(p_core)
+        h = np.maximum(h0 + x**2 / (2.0 * R) + defl_final + htex - delta_h, h_floor)
+
+        p_asp_sub = asperity_pressure_zhao_masjedi(
             h, x, W, Ve, R, sigma=sigma_combined, hardness_GPa=6.0
         )
 
+        Wa_sub = np.trapezoid(p_asp_sub, x) * L
+        Wh_sub = np.trapezoid(p, x) * L
+        total_load = Wa_sub + Wh_sub
+
+        load_resid = total_load - W
+        if np.abs(W) > 0.0 and np.abs(load_resid / W) < load_tol:
+            break
+
+        # Hertzian-based compliance gives a physically grounded stiffness scale
+        k_eff = (np.pi * E_star * L) / (4.0 * max(a, 1e-12))
+        delta_update = load_resid / (k_eff + 1e-30)
+        delta_hist.append(delta_h)
+        resid_hist.append(load_resid)
+
+        if len(delta_hist) >= 2 and (resid_hist[-1] - resid_hist[-2]) != 0.0:
+            # Secant refinement using prior iteration
+            secant = (delta_hist[-1] - delta_hist[-2]) / (resid_hist[-1] - resid_hist[-2])
+            delta_h -= load_resid * secant
+        else:
+            delta_h -= delta_update
 
     # ---------------- Final fields on extended window ----------------
     p = embed_p(p_core)
 
-    h = np.maximum(h0 + x**2 / (2.0 * R) + defl + htex, h_floor)
+    h = np.maximum(h0 + x**2 / (2.0 * R) + defl_final + htex - delta_h, h_floor)
 
 
     # Mixed load split: Zhao/Masjedi asperity + hydrodynamic (no extra scaling)
@@ -937,7 +1166,6 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     W_total_final = Wa_final + Wh_now  # for diagnostics if you want to print/log
 
     # Friction (hydrodynamic + boundary)
-        # Friction (hydrodynamic + boundary)
     eta_w, _dT_f = eta_houpert(p, TEMP_C, Ve, h, a)
     dpdx   = np.gradient(p, x)
     gdot_wall = np.maximum(np.abs(Vs) / np.maximum(h, 1e-12), 1e-6)
@@ -957,6 +1185,14 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
     Fh = np.trapezoid(tau_eff, x) * L
     Fb = L * np.trapezoid(mu_b * p_asp_final, x)
 
+    seed_out = {
+        "p_core": p_core.copy(),
+        "h_nom": h.copy(),
+        "theta": theta.copy(),
+        "p_asp": p_asp_final.copy(),
+        "delta_h": float(delta_h),
+    }
+
     return {
         "x": x, "X": X, "p": p, "h": h,
         "Fh": float(Fh), "Fb": float(Fb),
@@ -969,12 +1205,12 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 # ============================================================
 
 SAVE_UNTXT_ALL          = False   # master switch
-SAVE_UNTXT_PRESSURE_X   = True
-SAVE_UNTXT_FILM_X       = True
-SAVE_UNTXT_PASP_X       = True
-SAVE_UNTXT_FH_THETA     = True
-SAVE_UNTXT_FB_THETA     = True
-SAVE_UNTXT_WA_THETA     = True
+SAVE_UNTXT_PRESSURE_X   = False
+SAVE_UNTXT_FILM_X       = False
+SAVE_UNTXT_PASP_X       = False
+SAVE_UNTXT_FH_THETA     = False
+SAVE_UNTXT_FB_THETA     = False
+SAVE_UNTXT_WA_THETA     = False
 
 SAVE_UNTXT_RPMS         = [300, 500, 700, 900]
 SAVE_UNTXT_ANGLES_DEG   = None    # None → all TH_DEG
@@ -1165,42 +1401,42 @@ PLOT_CTRL = {
         "pressure": {
             "ENABLE": True,
             "surface_state": 0,       # 0=UN, 1=TEXTURED, 2=BOTH
-            "angles_deg": [7],
+            "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
             "texture_densities": [5],
         },
         "film": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
-            "angles_deg": [7],
+            "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
             "texture_densities": [5],
         },
         "asperity": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
-            "angles_deg": [7],
+            "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
             "texture_densities": [8],
         },
     },
     "sweeps_theta": {
         "Wa": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
             "sigma_values": None,    # None → use base sigma_combined
         },
         "Fh": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
             "sigma_values": None,
         },
         "Fb": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
@@ -1219,16 +1455,16 @@ PLOT_CTRL = {
         "rpms": [300],
     },
     "avg_torque_reduction": {
-        "ENABLE": True,
-        "rpms": [ 900],
+        "ENABLE": False,
+        "rpms": [ 300,500,700,900],
         "texture_densities": [5,8,10],
     },
     "kin_vars": {
-        "ENABLE": True,
-        "rpms": [300],
+        "ENABLE": False,
+        "rpms": [300,500,700,900],
     },
     "htex": {
-        "ENABLE": True,
+        "ENABLE": False,
         "rpms": [300,500,700,900],
         "texture_densities": [5],
     },
@@ -1327,20 +1563,28 @@ def plot_profiles_x():
 def _compute_sweep_theta(rpm, textured, dens_keys, sigma_values, var_key):
     angles = TH_DEG.copy()
     curves = {}
+
+    # --------------------------------------------------------
+    # NEW: for UNTEXTURED Fh / Fb, ALWAYS prefer text files
+    # --------------------------------------------------------
+    if not textured and var_key in ("Fh", "Fb"):
+        file_kind = {"Fh": "Fh_theta", "Fb": "Fb_theta"}[var_key]
+        ang_f, y_f = _scalar_series_from_file(file_kind, rpm)
+        if ang_f is not None:
+            # Use the stored untextured data and skip recomputation
+            curves[("UN", sigma_combined)] = (ang_f, y_f)
+            return curves
+        # if file missing or empty, we fall through and compute numerically
+
+    # sigma handling (unchanged for other cases)
     if sigma_values is None or len(_as_list(sigma_values)) == 0:
-        if not textured and var_key in ("Fh", "Fb", "Wa"):
-            file_kind = {"Fh": "Fh_theta", "Fb": "Fb_theta", "Wa": "Wa_theta"}[var_key]
-            ang_f, y_f = _scalar_series_from_file(file_kind, rpm)
-            if ang_f is not None:
-                curves[("UN", sigma_combined)] = (ang_f, y_f)
-                return curves
         sigmas = [sigma_combined]
     else:
         sigmas = [float(s) for s in _as_list(sigma_values)]
 
     R, Ve, Vs, W, w = kin_arrays(rpm)
     dt = _dt_for_rpm(rpm)
-    shift = integrate_shift(Vs,Ve, w)
+    shift = integrate_shift(Vs, Ve, w)
     arm = rb + lift_s
 
     for sigma_val in sigmas:
@@ -1398,9 +1642,9 @@ def _compute_sweep_theta(rpm, textured, dens_keys, sigma_values, var_key):
                     curves[(label, sigma_val)] = (angles, Wa_arr)
                 elif var_key == "Torque":
                     curves[(label, sigma_val)] = (angles, (Fh_arr + Fb_arr) * arm)
+
     _reset_sigma_default()
     return curves
-
 
 def plot_sweeps_theta():
     cfg_all = PLOT_CTRL["sweeps_theta"]
@@ -1504,40 +1748,69 @@ def report_avg_torque_reduction():
             red = 100.0 * (Tabs_un - Tabs_tex) / denom
             print(f"   density={dk:>3}  <|T|>={Tabs_tex: .4e}  Δ%={red: .2f}")
 
-
 def plot_kinematic_variables():
     cfg = PLOT_CTRL["kin_vars"]
     if not cfg.get("ENABLE", False):
         return
-    rpms = [int(r) for r in _as_list(cfg.get("rpms", []))]
-    for rpm in rpms:
-        R, Ve, Vs, W, w = kin_arrays(rpm)
-        a = a_hertz(W, R)
-        ph = ph_hertz(W, a)
-        lam = np.zeros_like(TH_DEG, dtype=float)
-        hc = np.zeros_like(TH_DEG, dtype=float)
-        for i, ang in enumerate(TH_DEG):
-            hc[i] = central_film_thickness(R[i], W[i], Ve[i])
-            lam[i] = hc[i] / (sigma_combined + 1e-30)
-        plt.figure(figsize=(10, 10))
-        vars_and_labels = [
-            (Ve, "Ve (m/s)"),
-            (Vs, "Vs (m/s)"),
-            (R, "R (m)"),
-            (W, "W (N)"),
-            (lam, "λ"),
-            (a, "a_hertz (m)"),
-            (ph, "ph (Pa)"),
-        ]
-        nvar = len(vars_and_labels)
-        for k, (y, lab) in enumerate(vars_and_labels, start=1):
-            plt.subplot(ceil(nvar / 2), 2, k)
-            plt.plot(TH_DEG, y)
-            plt.xlabel("Cam angle (deg)")
-            plt.ylabel(lab)
-            plt.grid(True, alpha=0.3)
-        plt.suptitle(f"Kinematic / contact variables vs angle — rpm={rpm}")
 
+    rpms = [int(r) for r in _as_list(cfg.get("rpms", []))]
+    if not rpms:
+        return
+
+    # --- define variables and create one figure per variable ---
+    vars_meta = [
+        ("Ve",  "Ve (m/s)"),
+        ("Vs",  "Vs (m/s)"),
+        ("R",   "R (m)"),
+        ("W",   "W (N)"),
+        ("hc",  "hc (m)"),          # central film thickness
+        ("lam", "λ (= hc/σ)"),
+        ("a",   "a_hertz (m)"),
+        ("ph",  "ph (Pa)"),
+    ]
+
+    axes = {}
+    for key, label in vars_meta:
+        fig, ax = plt.subplots(figsize=(6.0, 4.5))   # narrower & taller
+        ax.set_xlabel("Cam angle (deg)")
+        ax.set_ylabel(label)
+        ax.grid(True, alpha=0.4)
+        ax.set_title(f"{label} vs cam angle")
+        axes[key] = ax
+
+    # --- loop over rpms and add each rpm as a curve on all figures ---
+    for rpm in rpms:
+        # kinematics / contact arrays for this rpm
+        R, Ve, Vs, W, w = kin_arrays(rpm)
+        a  = a_hertz(W, R)
+        ph = ph_hertz(W, a)
+
+        hc  = np.zeros_like(TH_DEG, dtype=float)
+        lam = np.zeros_like(TH_DEG, dtype=float)
+        for i in range(len(TH_DEG)):
+            hc[i]  = central_film_thickness(R[i], W[i], Ve[i])
+            lam[i] = hc[i] / (sigma_combined + 1e-30)
+
+        series = {
+            "Ve":  Ve,
+            "Vs":  Vs,
+            "R":   R,
+            "W":   W,
+            "hc":  hc,
+            "lam": lam,
+            "a":   a,
+            "ph":  ph,
+        }
+
+        for key, y in series.items():
+            ax = axes[key]
+            ax.plot(TH_DEG, y, linewidth=1.6, label=f"{rpm} rpm")
+
+    # --- add legends & tidy layout ---
+    for ax in axes.values():
+        if len(rpms) > 1:
+            ax.legend(title="rpm")
+        ax.figure.tight_layout()
 
 def plot_htex_vs_angle():
     cfg = PLOT_CTRL["htex"]
@@ -1558,8 +1831,10 @@ def plot_htex_vs_angle():
                 a_theta = a_hertz(W[j], R[j])
                 atex_j = A_TEXTURE_CONST if TEXTURE_ZONE_MASK[j] else 0.0
                 htex = htex_profile(
-                    np.array([0.0]), a_theta, atex_j, float(shift[j]), dtex
+                   np.array([0.0]), a_theta, atex_j, float(shift[j]), dtex,
+                   rpm=rpm, temp_c=TEMP_C
                 )
+
                 h_center[idx] = htex[0]
             plt.plot(angles, h_center, label=f"{dk}")
         plt.xlabel("Cam angle (deg)")
