@@ -9,6 +9,6 @@ TASK:
 3) Once achieved the correct profiles and magnitude of Wa then plot/print Reynolds pressure p vs x axis for 5 different cam angles at 300 rpm. The reynolds pressure must be as per standard theory profile close to dome shape/symmetry and must have reasonable magnitude about less than 3 GPa. But avoid putting any constraints or non-physical boundness or conditions.
 
 TESTING & ACCEPTANCE:
-
+You must run the script everytime and optimize the physics realistically as per cam  follower mechamism and mixed lubrication line contact theory
 Avoid non-physical scaling. Your work must be purely true literature base numerical work. Only correct and optimize physics.
 Once achieved then generate only the updated code for me
