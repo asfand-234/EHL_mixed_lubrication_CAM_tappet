@@ -69,173 +69,6 @@ T_SHIFT        = 138.0
 K_THERM_TABLE  = {90: 0.11, 110: 0.14}
 GAMMA_TH_TABLE = {90: 4.5e-4, 110: 6.5e-4}
 
-# ============================================================
-# Gaussian RBF model parameters (imported from text file)
-# ============================================================
-RBF_DATA_FILE = os.path.join(DATA_DIR, "rbf_centers_weights.txt")
-
-RBF_SIGMA = 0.4
-RBF_TARGET_SCALE = 0.8
-
-# Will be populated once from the text file
-RBF_CENTERS = None   # shape (N, 2) → (S_i, F_i)
-RBF_WEIGHTS = None   # shape (N,)
-
-
-def _load_rbf_data():
-    """
-    Load RBF centres and weights from text file in the current folder.
-
-    This version assumes 'rbf_centers_weights.txt' is in the same
-    directory where you run the script / notebook.
-    It does NOT fall back silently: any problem raises RuntimeError.
-    """
-    global RBF_CENTERS, RBF_WEIGHTS
-
-    # Already loaded?
-    if (RBF_CENTERS is not None) and (RBF_WEIGHTS is not None):
-        return
-
-    try:
-        raw = np.loadtxt(RBF_DATA_FILE, comments="#")
-    except OSError as e:
-        raise RuntimeError(
-            f"Cannot open RBF data file '{RBF_DATA_FILE}': {e}"
-        )
-    except ValueError as e:
-        raise RuntimeError(
-            f"Cannot parse RBF data file '{RBF_DATA_FILE}': {e}"
-        )
-
-    if raw.ndim != 2 or raw.shape[1] < 4:
-        raise RuntimeError(
-            f"RBF data file '{RBF_DATA_FILE}' must have at least 4 columns "
-            f"(index, S_i, F_i, w_i)."
-        )
-
-    centres = raw[:, 1:3].astype(float)  # S_i, F_i
-    weights = raw[:, 3].astype(float)    # w_i
-
-    if centres.shape[0] != weights.shape[0]:
-        raise RuntimeError(
-            "RBF centres and weights length mismatch: "
-            f"{centres.shape[0]} vs {weights.shape[0]}"
-        )
-
-    RBF_CENTERS = centres
-    RBF_WEIGHTS = weights
-    # Optional debug:
-    # print(f"Loaded RBF data: {RBF_CENTERS.shape[0]} centres")
-
-
-def _rbf_predict_E(S_val, F_val):
-    """
-    Gaussian RBF prediction of E at a given (S, F):
-
-        E_pred(S,F) = TARGET_SCALE * sum_i w_i *
-                      exp(-((S-S_i)^2 + (F-F_i)^2)/(2 sigma^2))
-
-    This always uses the data from 'rbf_centers_weights.txt'.
-    """
-    _load_rbf_data()  # may raise RuntimeError if file/problem
-
-    vec = np.array([float(S_val), float(F_val)], dtype=float)  # (2,)
-    diff = RBF_CENTERS - vec                                   # (N, 2)
-    r2 = np.sum(diff * diff, axis=1)                          # (N,)
-    kernel = np.exp(-r2 / (2.0 * RBF_SIGMA * RBF_SIGMA))      # (N,)
-
-    return float(RBF_TARGET_SCALE * np.dot(kernel, RBF_WEIGHTS))
-
-
-# ============================================================
-# E_eff tables: ONLY (S, F) data vs (T, rpm, density)
-# Data correspond to rows in symbolic_data.txt
-# (Temperature 90/110 °C, rpm 300/500/700/900, density 5/8/10 %)
-# ============================================================
-E_EFF_TABLE = {
-    90: {
-        300: {
-            "5%":  {"S": 7.225, "F": 3.966},
-            "8%":  {"S": 7.225, "F": 2.436},
-            "10%": {"S": 7.225, "F": 2.040},
-        },
-        500: {
-            "5%":  {"S": 5.159, "F": 3.669},
-            "8%":  {"S": 5.159, "F": 2.254},
-            "10%": {"S": 5.159, "F": 1.887},
-        },
-        700: {
-            "5%":  {"S": 4.171, "F": 3.327},
-            "8%":  {"S": 4.171, "F": 2.044},
-            "10%": {"S": 4.171, "F": 1.711},
-        },
-        900: {
-            "5%":  {"S": 4.000, "F": 2.991},
-            "8%":  {"S": 4.000, "F": 1.837},
-            "10%": {"S": 4.000, "F": 1.538},
-        },
-    },
-    110: {
-        300: {
-            "5%":  {"S": 11.674, "F": 3.966},
-            "8%":  {"S": 11.674, "F": 2.436},
-            "10%": {"S": 11.674, "F": 2.040},
-        },
-        500: {
-            "5%":  {"S": 8.335, "F": 3.669},
-            "8%":  {"S": 8.335, "F": 2.254},
-            "10%": {"S": 8.335, "F": 1.887},
-        },
-        700: {
-            "5%":  {"S": 6.739, "F": 3.327},
-            "8%":  {"S": 6.739, "F": 2.044},
-            "10%": {"S": 6.739, "F": 1.711},
-        },
-        900: {
-            "5%":  {"S": 5.788, "F": 2.991},
-            "8%":  {"S": 5.788, "F": 1.837},
-            "10%": {"S": 5.788, "F": 1.538},
-        },
-    },
-}
-
-
-def get_E_eff(temp_c, rpm, tex_key):
-    """
-    Return E_eff for given temperature [°C], rpm, and texture key ("5%", "8%", "10%").
-
-    This version has no silent fallbacks:
-      - If (T, rpm, tex_key) is not found in E_EFF_TABLE → KeyError.
-      - If RBF file is missing or invalid → RuntimeError.
-      - Otherwise always uses the Gaussian RBF model on the corresponding (S, F).
-    """
-    # Normalise keys
-    temp_key = int(temp_c)
-    if temp_key not in E_EFF_TABLE:
-        raise KeyError(f"get_E_eff: unknown temperature key {temp_key} °C")
-
-    temp_table = E_EFF_TABLE[temp_key]
-
-    rpm_int = int(round(float(rpm)))
-    if rpm_int not in temp_table:
-        raise KeyError(
-            f"get_E_eff: unknown rpm {rpm_int} at T={temp_key} °C"
-        )
-
-    rpm_row = temp_table[rpm_int]
-
-    if tex_key not in rpm_row:
-        raise KeyError(
-            f"get_E_eff: unknown texture key '{tex_key}' at "
-            f"T={temp_key} °C, rpm={rpm_int}"
-        )
-
-    entry = rpm_row[tex_key]
-    S_val = entry["S"]
-    F_val = entry["F"]
-
-    # Always compute E from the Gaussian formula (no fallback to 1.0)
-    return _rbf_predict_E(S_val, F_val)
 
 
 if TEMP_C not in (90, 110):
@@ -684,21 +517,11 @@ def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture,
             f"any known texture density in D_TEXTURE."
         )
 
-    # 2) rpm must be provided when using Gaussian E_eff
-    if rpm is None:
-        raise ValueError(
-            "htex_profile: rpm must not be None when computing E_eff."
-        )
 
-    # Always get E_eff from Gaussian RBF model (no more fallback to 1.0)
-    E_eff_local = get_E_eff(temp_c, rpm, tex_key)
-
-    # 3) Texture pocket profile, scaled by E_eff_local
     # Periodic pocket centres with pitch d_texture
     u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
     expo = np.log(g_val / atex_theta) * (u**2) / (w_texture**2 + 1e-30)
 
-    # Final textured contribution, scaled by E_eff_local
     h = atex_theta * np.exp(expo)
 
     return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
@@ -1858,3 +1681,4 @@ if __name__ == "__main__":
     run_plots()
     if SHOW_PLOTS:
         plt.show()
+
