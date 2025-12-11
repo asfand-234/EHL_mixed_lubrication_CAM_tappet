@@ -3,12 +3,15 @@ And cam lift data "updated_lift.txt"
 
 TASK:
 
-1) Your task is to Run the script and print data or plot only asperity load Wa vs cam angle at rpm 300 for untextured case only. There are too much fluctuations in this graph. Probably due to incorrect asperity presssure and which depends on film thickness h and which is due to incorrect reynolds solution. 
-2) Remove all the unnecessary scaling, clampings/clippings, boundness in the entire code especially in the reynolds solver. And make these loop as per real and standard Literature from web sources research articles/journals. Which state that, Wa + Wh must be equal to W (cam dynamic contact load). Then remove the non realistic h0 finding approach and other pressure and load balance scaling. Then re run the script and print Wa vs cam angle and analyze the behaviour. As per theory, the asperity load remain maximum around cam nose angles and decreasing away from it. 
+Your task is to Run the script and print the data of reynolds pressure p vs x axis at 300 rpm, at 6° cam angle and for untexture case only. You can see that the current reynolds pressure is not as per standard EHL theory. You must have to deeply analyze the entire def solve theta and every term of reynolds equation. And find the true real cause and fix it and re-print the pressure data vs x axis. If pressure profile meet the target profile then stop else keep optimizing physics.
 
-3) Once achieved the correct profiles and magnitude of Wa then plot/print Reynolds pressure p vs x axis for 5 different cam angles at 300 rpm. The reynolds pressure must be as per standard theory profile close to dome shape/symmetry and must have reasonable magnitude about less than 3 GPa. But avoid putting any constraints or non-physical boundness or conditions.
+TARGET PROFILE:
+As per standard EHL theory, the reynolds pressure must starts from -a and quite symmetrically extented to +a and away from it must be zero. 
+The pressure profile more looks like hertzian shape or dome like shape with a tiny dent (slight dip of pressure magnitude) of cavitation near right boundary (+a).
+
+CONSTRAINTS:
+1) Do Not implement any non-physical scaling, clipping/clamping, constraints or conditions.
+2) Your correction must be purely physics base as per standard theory.
 
 TESTING & ACCEPTANCE:
-You must run the script everytime and optimize the physics realistically as per cam  follower mechamism and mixed lubrication line contact theory
-Avoid non-physical scaling. Your work must be purely true literature base numerical work. Only correct and optimize physics.
-Once achieved then generate only the updated code for me
+Keep optiming physics, keep printing p vs x axis until you meet the target. Once target achieved then provide updated reafy to paste script for me.
