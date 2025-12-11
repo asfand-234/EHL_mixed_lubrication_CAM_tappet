@@ -1,3 +1,4 @@
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -768,160 +769,163 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         h      = h_seed.copy()
         defl_final.fill(0.0)
 
-            # ========== Inner Reynolds iterations (unsteady, 1D) ==========
-    for _it in range(int(max(iters, 1))):
+        # ========== Inner Reynolds iterations (unsteady, 1D) ==========
+        for _it in range(int(max(iters, 1))):
 
-        # --- Embed current core pressure on the extended x-grid ---
-        p_embed = embed_p(p_core)
+            # --- Embed current core pressure on the extended x-grid ---
+            p_embed = embed_p(p_core)
 
-        # --- Elastic deflection under total pressure (hydro + asperity) ---
-        p_tot_for_defl = p_embed + p_asp
-        defl = elastic_deflection(x, p_tot_for_defl)
+            # --- Elastic deflection under total pressure (hydro + asperity) ---
+            p_tot_for_defl = p_embed + p_asp
+            defl = elastic_deflection(x, p_tot_for_defl)
 
-        # --- Film thickness: geometry + deflection + texture ---
-        h = np.maximum(
-            h0_curr + x**2 / (2.0 * R) + defl + htex,
-            h_floor
-        )
-
-        # --- Thermo-viscosity and density on the full x-grid ---
-        eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h, a)
-        rho_dim = rho_dowson_higginson(p_embed, dT_field)
-        phi_x   = phi_x_func(h)
-
-        # --- Effective viscosity for Poiseuille term (Carreau) ---
-        dpdx   = np.gradient(p_embed, x)
-        # pressure-driven contribution to shear rate
-        gdot_p = np.abs(0.5 * np.maximum(h, 1e-12) * np.abs(dpdx) /
-                        (np.maximum(eta_dim, 1e-7)))
-        # sliding contribution (Vs only affects rheology, not mass advection)
-        gdot_s = np.maximum(np.abs(Vs) / np.maximum(h, 1e-12), 1e-6)
-        gdot_eff = np.sqrt(gdot_s**2 + gdot_p**2)
-
-        eta_eff_Re = eta_carreau(eta_dim, h, gdot_eff)
-
-        # --- Film fraction θ in [0,1] (Elrod–Adams) ---
-        theta = _clamp01(theta)
-
-        # --- Mobility D(x) for Poiseuille term in (X, P) coordinates ---
-        #     X = x / a,  P = p / ph  ⇒  ∂_X(D ∂_X P) = RHS
-        D_full = (
-            phi_x * (h**3) * rho_dim * ph * theta
-            / (12.0 * eta_eff_Re * (a**2) + 1e-30)
-        )
-        D_full = np.maximum(D_full, 0.0)
-
-        # --------------------------------------------------------------
-        # Mass-conserving RHS:  ∂_X(D ∂_X P) = ∂_x(ρ h θ U_e) + ∂_t(ρ h θ)
-        # Here U_e = Ve (pure entrainment). Sliding Vs only affects shear.
-        # --------------------------------------------------------------
-        # Conservative variable g = ρ h θ
-        g = rho_dim * np.maximum(h, 1e-12) * theta
-
-        # (1) Entrainment term: ∂_x(ρ h θ U_e) with U_e = Ve (constant in x)
-        term_adv_full = Ve * np.gradient(g, x)
-
-        # (2) Unsteady compressibility term: ∂_t(ρ h θ) between cam steps
-        if (mass_prev is not None) and (dt > 0.0) and (mass_prev.shape == x.shape):
-            term_unsteady_full = (g - mass_prev) / dt
-        else:
-            term_unsteady_full = np.zeros_like(x)
-
-        RHS_full = term_adv_full + term_unsteady_full
-
-        # --- Map D and RHS to the core grid s ∈ [-1, 1] ---
-        D_core   = np.interp(xs, x, D_full)
-        RHS_core = np.interp(xs, x, RHS_full)
-
-        # --------------------------------------------------------------
-        # Tridiagonal solve: ∂_X(D ∂_X P) = RHS  with P(-1) = P(1) = 0
-        # --------------------------------------------------------------
-        M = len(xs)
-        A = np.zeros(M)
-        B = np.zeros(M)
-        C = np.zeros(M)
-        RHS = np.zeros(M)
-        invdS2 = 1.0 / (dS * dS + 1e-30)
-
-        # Boundary nodes: P = 0 at X = ±1 (p = 0 at x = ±a)
-        B[0] = 1.0
-        RHS[0] = 0.0
-        for j in range(1, M - 1):
-            Dw = 0.5 * (D_core[j] + D_core[j - 1])
-            De = 0.5 * (D_core[j] + D_core[j + 1])
-            A[j] = -Dw * invdS2
-            C[j] = -De * invdS2
-            B[j] = -(A[j] + C[j]) + 1e-12  # strictly diagonally dominant
-            RHS[j] = RHS_core[j]
-        B[M - 1] = 1.0
-        RHS[M - 1] = 0.0
-
-        # Save old non-dimensional pressure for convergence check
-        P_old_nd = p_core / ph
-
-        # Forward elimination (Thomas algorithm)
-        for j in range(1, M):
-            wfac = A[j] / (B[j - 1] + 1e-30)
-            B[j]   -= wfac * C[j - 1]
-            RHS[j] -= wfac * RHS[j - 1]
-
-        # Back substitution
-        P_new = np.zeros(M)
-        P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
-        for j in range(M - 2, -1, -1):
-            P_new[j] = (RHS[j] - C[j] * P_new[j + 1]) / (B[j] + 1e-30)
-
-        # Ensure non-negative pressure (JFO-like condition)
-        P_new = np.maximum(P_new, 0.0)
-
-        # --- Embed back on extended grid for cavitation and rheology ---
-        p_tmp = embed_p(P_new * ph)
-
-        # --------------------------------------------------------------
-        # Elrod–Adams cavitation update for θ (pseudo-time dts)
-        # In cavitated zones (p=0), g obeys: ∂g/∂t + Ve ∂g/∂x = 0
-        # We use the same term_adv_full as above for consistency.
-        # --------------------------------------------------------------
-        full_mask = (p_tmp > 0.0)
-        cav_mask  = ~full_mask
-
-        # Full-film region: θ = 1
-        theta[full_mask] = 1.0
-
-        # Cavitated region: update θ by upwind-like relaxation
-        den_cav = (rho_dim[cav_mask] *
-                   np.maximum(h[cav_mask], 1e-12) + 1e-30)
-        theta[cav_mask] = _clamp01(
-            theta[cav_mask] - dts * term_adv_full[cav_mask] / den_cav
-        )
-
-        # --------------------------------------------------------------
-        # Relax pressure on the core grid and apply mild smoothing
-        # --------------------------------------------------------------
-        P_core_relaxed = (1.0 - relax_p) * P_old_nd + relax_p * P_new
-
-        # Small 3-point smoother to avoid spurious oscillations
-        if len(P_core_relaxed) >= 3:
-            Ptmp = P_core_relaxed.copy()
-            P_core_relaxed[1:-1] = (
-                0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
+            # --- Film thickness: geometry + deflection + texture ---
+            h = np.maximum(
+                h0_curr + x**2 / (2.0 * R) + defl + htex,
+                h_floor
             )
 
-        # Enforce boundary conditions after smoothing
-        P_core_relaxed[0]  = 0.0
-        P_core_relaxed[-1] = 0.0
+            # --- Thermo-viscosity and density on the full x-grid ---
+            eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h, a)
+            rho_dim = rho_dowson_higginson(p_embed, dT_field)
+            phi_x   = phi_x_func(h)
 
-        # Update dimensional core pressure
-        p_core = P_core_relaxed * ph
+            # --- Effective viscosity for Poiseuille term (Carreau) ---
+            dpdx   = np.gradient(p_embed, x)
+            # pressure-driven contribution to shear rate
+            gdot_p = np.abs(0.5 * np.maximum(h, 1e-12) * np.abs(dpdx) /
+                            (np.maximum(eta_dim, 1e-7)))
+            # sliding contribution (Vs only affects rheology, not mass advection)
+            gdot_s = np.maximum(np.abs(Vs) / np.maximum(h, 1e-12), 1e-6)
+            gdot_eff = np.sqrt(gdot_s**2 + gdot_p**2)
 
-        # --- Convergence check on core pressure ---
-        res_p = np.max(np.abs(P_core_relaxed - P_old_nd))
-        if res_p < 1e-5:
-            break
+            eta_eff_Re = eta_carreau(eta_dim, h, gdot_eff)
 
-    # ---- Hydrodynamic pressure and film after inner convergence ----
+            # --- Film fraction θ in [0,1] (Elrod–Adams) ---
+            theta = _clamp01(theta)
+
+            # --- Mobility D(x) for Poiseuille term in (X, P) coordinates ---
+            #     X = x / a,  P = p / ph  ⇒  ∂_X(D ∂_X P) = RHS
+            D_full = (
+                phi_x * (h**3) * rho_dim * ph * theta
+                / (12.0 * eta_eff_Re * (a**2) + 1e-30)
+            )
+            D_full = np.maximum(D_full, 0.0)
+
+            # --------------------------------------------------------------
+            # Mass-conserving RHS:  ∂_X(D ∂_X P) = ∂_x(ρ h θ U_e) + ∂_t(ρ h θ)
+            # Here U_e = Ve (pure entrainment). Sliding Vs only affects shear.
+            # --------------------------------------------------------------
+            # Conservative variable g = ρ h θ
+            g = rho_dim * np.maximum(h, 1e-12) * theta
+
+            # (1) Entrainment term: ∂_x(ρ h θ U_e) with U_e = Ve (constant in x)
+            if abs(Ve) > 0.0:
+                term_adv_full = rusanov_div_bc(float(Ve), g, dx, g[0], g[-1])
+            else:
+                term_adv_full = np.zeros_like(g)
+
+            # (2) Unsteady compressibility term: ∂_t(ρ h θ) between cam steps
+            if (mass_prev is not None) and (dt > 0.0) and (mass_prev.shape == x.shape):
+                term_unsteady_full = (g - mass_prev) / dt
+            else:
+                term_unsteady_full = np.zeros_like(x)
+
+            RHS_full = term_adv_full + term_unsteady_full
+
+            # --- Map D and RHS to the core grid s ∈ [-1, 1] ---
+            D_core   = np.interp(xs, x, D_full)
+            RHS_core = np.interp(xs, x, RHS_full)
+
+            # --------------------------------------------------------------
+            # Tridiagonal solve: ∂_X(D ∂_X P) = RHS  with P(-1) = P(1) = 0
+            # --------------------------------------------------------------
+            M = len(xs)
+            A = np.zeros(M)
+            B = np.zeros(M)
+            C = np.zeros(M)
+            RHS = np.zeros(M)
+            invdS2 = 1.0 / (dS * dS + 1e-30)
+
+            # Boundary nodes: P = 0 at X = ±1 (p = 0 at x = ±a)
+            B[0] = 1.0
+            RHS[0] = 0.0
+            for j in range(1, M - 1):
+                Dw = 0.5 * (D_core[j] + D_core[j - 1])
+                De = 0.5 * (D_core[j] + D_core[j + 1])
+                A[j] = -Dw * invdS2
+                C[j] = -De * invdS2
+                B[j] = -(A[j] + C[j]) + 1e-12  # strictly diagonally dominant
+                RHS[j] = RHS_core[j]
+            B[M - 1] = 1.0
+            RHS[M - 1] = 0.0
+
+            # Save old non-dimensional pressure for convergence check
+            P_old_nd = p_core / ph
+
+            # Forward elimination (Thomas algorithm)
+            for j in range(1, M):
+                wfac = A[j] / (B[j - 1] + 1e-30)
+                B[j]   -= wfac * C[j - 1]
+                RHS[j] -= wfac * RHS[j - 1]
+
+            # Back substitution
+            P_new = np.zeros(M)
+            P_new[-1] = RHS[-1] / (B[-1] + 1e-30)
+            for j in range(M - 2, -1, -1):
+                P_new[j] = (RHS[j] - C[j] * P_new[j + 1]) / (B[j] + 1e-30)
+
+            # Ensure non-negative pressure (JFO-like condition)
+            P_new = np.maximum(P_new, 0.0)
+
+            # --- Embed back on extended grid for cavitation and rheology ---
+            p_tmp = embed_p(P_new * ph)
+
+            # --------------------------------------------------------------
+            # Elrod–Adams cavitation update for θ (pseudo-time dts)
+            # In cavitated zones (p=0), g obeys: ∂g/∂t + Ve ∂g/∂x = 0
+            # --------------------------------------------------------------
+            full_mask = (p_tmp > 0.0)
+            cav_mask  = ~full_mask
+
+            # Full-film region: θ = 1
+            theta[full_mask] = 1.0
+
+            # Cavitated region: update θ by upwind-like relaxation
+            if np.any(cav_mask):
+                den_cav = (
+                    rho_dim[cav_mask] * np.maximum(h[cav_mask], 1e-12) + 1e-30
+                )
+                theta[cav_mask] = _clamp01(
+                    theta[cav_mask] - dts * term_adv_full[cav_mask] / den_cav
+                )
+
+            # --------------------------------------------------------------
+            # Relax pressure on the core grid and apply mild smoothing
+            # --------------------------------------------------------------
+            P_core_relaxed = (1.0 - relax_p) * P_old_nd + relax_p * P_new
+
+            # Small 3-point smoother to avoid spurious oscillations
+            if len(P_core_relaxed) >= 3:
+                Ptmp = P_core_relaxed.copy()
+                P_core_relaxed[1:-1] = (
+                    0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
+                )
+
+            # Enforce boundary conditions after smoothing
+            P_core_relaxed[0]  = 0.0
+            P_core_relaxed[-1] = 0.0
+
+            # Update dimensional core pressure
+            p_core = P_core_relaxed * ph
+
+            # --- Convergence check on core pressure ---
+            res_p = np.max(np.abs(P_core_relaxed - P_old_nd))
+            if res_p < 1e-5:
+                break
 
         # ---- Hydrodynamic pressure and film after inner convergence ----
+
         p = embed_p(p_core)
         p_tot = p + p_asp
         defl_final = elastic_deflection(x, p_tot)
@@ -1258,19 +1262,19 @@ PLOT_CTRL = {
         "pressure": {
             "ENABLE": True,
             "surface_state": 0,       # 0=UN, 1=TEXTURED, 2=BOTH
-            "angles_deg": [-2,-5,2,6,-8,10],
+            "angles_deg": [6],
             "rpms": [300],
             "texture_densities": [5],
         },
         "film": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
             "texture_densities": [5],
         },
         "asperity": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
@@ -1286,14 +1290,14 @@ PLOT_CTRL = {
             "sigma_values": None,    # None → use base sigma_combined
         },
         "Fh": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
             "sigma_values": None,
         },
         "Fb": {
-            "ENABLE": True,
+            "ENABLE": False,
             "surface_state": 0,
             "rpms": [300],
             "texture_densities": [8],
