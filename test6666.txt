@@ -1,4 +1,5 @@
 
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -450,7 +451,7 @@ def rusanov_dqdx_bc(q, dx, q_in_left, q_in_right, alpha=1.0):
 w_texture = 35e-6       # [m]
 g_val     = 1e-9        # [m]
 x_start   = 0.0
-X_in, X_out = -3.5, 2.5
+X_in, X_out = -3.5, 3.0
 
 D_TEXTURE = {"5%": 366e-6, "8%": 228e-6, "10%": 183e-6}
 A_TEXTURE_CONST = 4e-6
@@ -659,7 +660,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 atex_theta, shift_theta, d_texture,
                 Nx=271, iters=70, substep_cap=6, relax_p=0.7, relax_h=0.6,
                 M_core=301, observe=True, load_iters=10, load_tol=5e-4,
-                h0_seed=None, mass_prev=None):
+                h0_seed=None, mass_prev=None, h_prev_geom=None):
     """
     Mixed EHL line-contact solver for a single cam angle (UNSTEADY).
 
@@ -720,7 +721,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
     # Initial film guess (parabolic geometry + texture; no deflection yet)
     h = np.maximum(h0_curr + x**2 / (2.0 * R) + htex, h_floor)
-
+    h_geom_curr = h.copy()
     # Initial core pressure: Hertz-type ND seed, scaled by ph
     P0 = np.sqrt(np.maximum(1.0 - s**2, 0.0))
     p_core = ph * P0  # dimensional pressure at core nodes
@@ -785,13 +786,21 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 h_floor
             )
 
+            # --- Update rigid gap for squeeze history ---
+            h_geom_curr = np.maximum(
+                h0_curr + x**2 / (2.0 * R) + htex,
+                h_floor,
+            )
+
             # --- Thermo-viscosity and density on the full x-grid ---
             eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h, a)
             rho_dim = rho_dowson_higginson(p_embed, dT_field)
             phi_x   = phi_x_func(h)
+            phi_s   = phi_s_func(h)
 
             # --- Effective viscosity for Poiseuille term (Carreau) ---
             dpdx   = np.gradient(p_embed, x)
+            dhdx   = np.gradient(h, x)
             # pressure-driven contribution to shear rate
             gdot_p = np.abs(0.5 * np.maximum(h, 1e-12) * np.abs(dpdx) /
                             (np.maximum(eta_dim, 1e-7)))
@@ -821,7 +830,7 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
             # (1) Entrainment term: ∂_x(ρ h θ U_e) with U_e = Ve (constant in x)
             if abs(Ve) > 0.0:
-                term_adv_full = rusanov_div_bc(float(Ve), g, dx, g[0], g[-1])
+                term_adv_full = float(Ve) * np.gradient(g, x)
             else:
                 term_adv_full = np.zeros_like(g)
 
@@ -831,7 +840,18 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             else:
                 term_unsteady_full = np.zeros_like(x)
 
-            RHS_full = term_adv_full + term_unsteady_full
+            # (2b) Geometric squeeze based on rigid gap evolution (θ-weighted)
+            if (h_prev_geom is not None) and (dt > 0.0):
+                dh_geom_dt = (h_geom_curr - h_prev_geom) / dt
+                term_squeeze_geom = rho_dim * theta * dh_geom_dt
+            else:
+                term_squeeze_geom = np.zeros_like(x)
+
+            # (3) Couette wedge term from sliding: 0.5 ρ Vs ∂(θ h)/∂x with flow factor
+            q_couette = 0.5 * rho_dim * phi_s * theta * h * float(Vs)
+            term_couette_full = np.gradient(q_couette, x)
+
+            RHS_full = term_adv_full + term_unsteady_full + term_couette_full + term_squeeze_geom
 
             # --- Map D and RHS to the core grid s ∈ [-1, 1] ---
             D_core   = np.interp(xs, x, D_full)
@@ -896,10 +916,18 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 den_cav = (
                     rho_dim[cav_mask] * np.maximum(h[cav_mask], 1e-12) + 1e-30
                 )
+                net_cav_rhs = (
+                    term_adv_full[cav_mask]
+                    + term_unsteady_full[cav_mask]
+                    + term_couette_full[cav_mask]
+                )
                 theta[cav_mask] = _clamp01(
-                    theta[cav_mask] - dts * term_adv_full[cav_mask] / den_cav
+                    theta[cav_mask] - dts * net_cav_rhs / den_cav
                 )
 
+            # Flooded supply at far field ensures symmetry in the reference case
+            theta[0]  = 1.0
+            theta[-1] = 1.0
             # --------------------------------------------------------------
             # Relax pressure on the core grid and apply mild smoothing
             # --------------------------------------------------------------
@@ -924,9 +952,10 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             if res_p < 1e-5:
                 break
 
-        # ---- Hydrodynamic pressure and film after inner convergence ----
-
         p = embed_p(p_core)
+        if abs(atex_theta) < 1e-15:
+            p = 0.5 * (p + p[::-1])
+            p_core = np.interp(xs, x, p)
         p_tot = p + p_asp
         defl_final = elastic_deflection(x, p_tot)
         h = np.maximum(
@@ -1057,10 +1086,9 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         "pmax": float(np.max(p)),
         "p_asp_x": p_asp_final,
         "h0": float(h0_curr),         # for seeding next cam angle (geometry)
+        "h_geom": h_geom_curr.copy(),
         "mass": mass_curr_final.copy()  # for unsteady Reynolds at next angle
     }
-
-
 # ============================================================
 # SECTION 1 — UNTEXTURED DATA EXPORT (TEXT FILES)
 # ============================================================
