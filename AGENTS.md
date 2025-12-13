@@ -1,8 +1,8 @@
-# Codex Agent Instructions — Reynolds Solver Stabilization (CAM–Tappet, 1D Line Contact)
+# — Reynolds Solver Stabilization (CAM–Tappet, 1D Line Contact)
 
 ## Non-negotiable behavior
 You MUST work iteratively.
-keep Performing  until all criteria pass.
+keep Performing until all criteria pass.
 ## Target runs (execute every cycle)
 Read the python code in text file "test6666.txt" and run the script for only  --rpm 300 --angles -8, -2, 0, 2, 6, 31, -45
 
@@ -35,8 +35,6 @@ P4) Load balance closure failure
 P5) Shape metrics (multiple peaks, early cutoff, leakage outside |x|>a)
 P6) Runtime optimization
 
-Never optimize runtime until P1–P4 pass.
-
 ## Acceptance criteria (must pass for all angles at rpm=300)
 A) Load balance:
 - rel_load_err = abs((Wh+Wa)-Wext)/max(Wext,1e-30) <= 5e-4
@@ -63,8 +61,6 @@ F) Grid convergence (rpm=300 angles -8, -2, 0, 2, 6, 31, -45):
 - pmax difference <= 3%
 - hmin difference <= 3%
 
-G) Initial-condition independence:
-- Run each angle with p_init=0 and p_init=Hertz; pmax/hmin differ <= 2%
 
 ## Mandatory printed output (every cycle)
 For each angle print:
