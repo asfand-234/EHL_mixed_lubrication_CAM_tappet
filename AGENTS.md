@@ -2,9 +2,9 @@
 
 ## Non-negotiable behavior
 You MUST work iteratively.
-keep Performing improve-cycles until all criteria pass.
+keep Performing  until all criteria pass.
 ## Target runs (execute every cycle)
-Run python code in text file **"test6666.txt"** for only  --rpm 300 --angles -8, -2, 0, 2, 6, 31, -45
+Read the python code in text file "test6666.txt" and run the script for only  --rpm 300 --angles -8, -2, 0, 2, 6, 31, -45
 
 Each improve-cycle MUST include:
 1) Run the verification runner (all requested angles)
