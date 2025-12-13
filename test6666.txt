@@ -1,4 +1,5 @@
 
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -732,9 +733,16 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
 
     # ---------------- Pseudo-time step for cavitation iteration ----------------
     # This is ONLY a numerical relaxation parameter for θ, not physical time.
-    CFL_TARGET = 0.6
+    #CFL_TARGET = 0.6
     u_char = max(abs(Ve), 1e-4)
-    dts = CFL_TARGET * dx / u_char
+    cfl = u_char * dt / (dx + 1e-30)
+    substeps = int(min(max(2, np.ceil(cfl / 0.35)), substep_cap))
+    dts = dt / max(substeps, 1)
+    
+    # Previous state for time derivatives (squeeze term)
+    h_nom_prev = h.copy()
+    p_prev = None  # will be set in first substep
+
 
     # Target compressive load
     W_target = max(W_ext, 0.0)
@@ -765,7 +773,10 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
         h      = h_seed.copy()
         defl_final.fill(0.0)
 
-        # ========== Inner FBNS / Reynolds iterations (steady) ==========
+        # ========== Inner FBNS / Reynolds iterations (unsteady with substeps) ==========
+        # Initialize previous state for squeeze term
+        p_prev_sub = embed_p(p_core).copy()
+        h_nom_prev_sub = h.copy()
         for _it in range(int(max(iters, 1))):
 
             p_embed = embed_p(p_core)
@@ -779,7 +790,15 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 h0_curr + x**2 / (2.0 * R) + defl + htex,
                 h_floor
             )
-
+# --- Update theta based on current pressure (Elrod-Adams) ---
+            # In full film region (p > 0): theta = 1.0
+            # In cavitation region (p = 0): theta < 1.0
+            p_threshold = 1.0  # Pa - threshold to distinguish full film from cavitation
+            full_mask = (p_embed > p_threshold)
+            cav_mask = ~full_mask
+            theta[full_mask] = 1.0
+            # Keep theta in cavitation region as is (will be updated later)
+            theta = _clamp01(theta)
             # --- Rheology & density ---
             eta_dim, dT_field = eta_houpert(p_embed, TEMP_C, Ve, h, a)
             rho_dim = rho_dowson_higginson(p_embed, dT_field)
@@ -794,42 +813,59 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             )
             eta_eff_Re = eta_carreau(eta_dim, h, gdot_eff)
 
-            # Film fraction θ (Elrod–Adams) in [0,1]
-            theta = _clamp01(theta)
-
-            # --- Mobility for steady Reynolds: ∂X(D ∂X P) = RHS ---
-            # P = p/ph, X = x/a
-            D_full = (
-                phi_x * (h**3) * rho_dim * ph * theta
+            # Standard mobility: D = (ρh³/(12η)) for full film
+            # In cavitation, effective mobility is reduced by theta
+            D_base = (
+                phi_x * (h**3) * rho_dim * ph
                 / (12.0 * eta_eff_Re * (a**2) + 1e-30)
             )
+            # Apply theta to mobility: in full film (p>0, theta=1), D = D_base
+            # In cavitation (p=0, theta<1), D = theta * D_base (reduced mobility)
+            # Use theta^3 for stronger cavitation effect (common in Elrod-Adams)
+            # But prevent complete collapse for numerical stability
+            theta_mob = np.maximum(theta**2, 0.05)  # theta^2 gives smoother transition
+            D_full = D_base * theta_mob
             D_full = np.maximum(D_full, 0.0)
-
-            # --- Advected mass flux q = ρ h θ u (steady; no squeeze term) ---
-            phi_s_mass = phi_s_func(h, sigma=sigma_combined)
-            u_cell = Ve + 0.5 * Vs * phi_s_mass
+            # Compute time derivatives for squeeze term
+            dhdt = (h - h_nom_prev_sub) / max(dts, 1e-12)
+            dpdt_embed = (p_embed - p_prev_sub) / max(dts, 1e-12)
+            
+            # Mass per unit length: q = θρh (includes cavitation via theta)
             q = rho_dim * np.maximum(h, 1e-12) * theta
-
-            # Rusanov / upwind divergence of mass flux
-            Nq = len(q)
-            u_face = np.empty(Nq + 1)
-            u_face[1:-1] = 0.5 * (u_cell[:-1] + u_cell[1:])
-            u_face[0] = u_cell[0]
-            u_face[-1] = u_cell[-1]
-
-            # Inlet/outlet states (full film at inlet)
-            h_left, h_right = h[0], h[-1]
-            if Ve >= 0.0:
-                q_in_left  = PHI_IN * rho0 * h_left * 1.0
-                q_in_right = q[-1]
+            u = Ve  # entrainment velocity
+            # Boundary conditions for mass flux (inlet/outlet)
+            # Use geometric film thickness at boundaries for inlet condition
+            h_geom_seed = np.maximum(h0_curr + x**2 / (2.0 * R) + htex, h_floor)
+            h_left_geom = h_geom_seed[0]
+            h_right_geom = h_geom_seed[-1]
+            if u >= 0.0:
+                # Flow from left to right: inlet at left, outlet at right
+                q_in_left  = PHI_IN * rho0 * h_left_geom * 1.0  # inlet: full film (θ=1)
+                q_in_right = q[-1] if len(q) > 0 else PHI_IN * rho0 * h_right_geom
             else:
-                q_in_left  = q[0]
-                q_in_right = PHI_IN * rho0 * h_right * 1.0
+                # Flow from right to left: inlet at right, outlet at left
+                q_in_left  = q[0] if len(q) > 0 else PHI_IN * rho0 * h_left_geom
+                q_in_right = PHI_IN * rho0 * h_right_geom * 1.0  # inlet: full film (θ=ht * 1.0
 
-            term_adv = rusanov_div_bc(u_face, q, dx, q_in_left, q_in_right)
+            # Couette term: Ve * ∂(θρh)/∂x using Rusanov upwind scheme
+            div_adv = rusanov_div_bc(u, q, dx, q_in_left, q_in_right)
+            term_adv = div_adv
 
-            # Right-hand side of Reynolds: ∂X(D ∂X P) = term_adv
-            RHS_full = term_adv
+           # Squeeze term: ∂(ρh)/∂t = ρ*∂h/∂t + h*∂ρ/∂t
+            # where ∂ρ/∂t = (dρ/dp) * ∂p/∂t
+            drdp = drho_dp_numeric(p_embed, dT_field, Ve, h, a)
+            term_squeeze = rho_dim * dhdt + np.maximum(h, 1e-12) * drdp * dpdt_embed
+            
+            # Total RHS: Couette + Squeeze
+            RHS_full = term_adv + term_squeeze
+            # Map to core grid
+            D_core   = np.interp(xs, x, D_full)
+            RHS_core = np.interp(xs, x, RHS_full)
+
+            # Assemble tridiagonal system in X
+            M = len(xs)
+            A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
+            invdS2 = 1.0 / (dS * dS + 1e-30)
 
             # Map to core grid
             D_core   = np.interp(xs, x, D_full)
@@ -840,11 +876,17 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             A = np.zeros(M); B = np.zeros(M); C = np.zeros(M); RHS = np.zeros(M)
             invdS2 = 1.0 / (dS * dS + 1e-30)
 
-            # Boundary: P=0 at X=±1
+            # Boundary conditions: P=0 at X=±1 (contact edges)
+            # For EHL, pressure should naturally decay to zero outside contact
+            # Using Dirichlet BC at X=±1 is appropriate for line contact
             B[0] = 1.0; RHS[0] = 0.0
             for j in range(1, M - 1):
+                # Harmonic average of diffusion coefficients at cell faces
                 Dw = 0.5 * (D_core[j] + D_core[j - 1])
                 De = 0.5 * (D_core[j] + D_core[j + 1])
+                # Ensure positive coefficients
+                Dw = np.maximum(Dw, 1e-20)
+                De = np.maximum(De, 1e-20)
                 A[j] = -Dw * invdS2
                 C[j] = -De * invdS2
                 B[j] = -(A[j] + C[j]) + 1e-12
@@ -867,26 +909,66 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
             p_tmp = embed_p(P_new * ph)
 
             # --- Elrod–Adams update of θ in cavitation (pseudo-time relaxation) ---
-            full_mask = (p_tmp > 0.0)
+            # --- Elrod–Adams update of θ in cavitation ---
+            # In full film region (p > 0): theta = 1.0
+            # In cavitation region (p = 0): theta evolves to satisfy mass conservation
+            # For unsteady: Ve * ∂(θρh)/∂x + ∂(θρh)/∂t = 0 in cavitation
+            full_mask = (p_tmp > p_threshold)
             cav_mask  = ~full_mask
 
             theta[full_mask] = 1.0
-
-            den_cav = (rho_dim[cav_mask] * np.maximum(h[cav_mask], 1e-12) + 1e-30)
-            theta[cav_mask] = _clamp01(
-                theta[cav_mask]
-                - dts * term_adv[cav_mask] / den_cav
-            )
-
+                        # In cavitation, update theta to satisfy mass conservation
+            # Mass conservation: ∂(θρh)/∂t + Ve * ∂(θρh)/∂x = 0
+            # This means: θ evolves to maintain constant mass flux
+            if np.any(cav_mask):
+                h_cav = h[cav_mask]
+                rho_cav = rho_dim[cav_mask]
+                
+                # Current mass content in cavitation: m = θρh
+                m_cav = theta[cav_mask] * rho_cav * np.maximum(h_cav, 1e-12)
+                
+                # Mass flux gradient: Ve * ∂(θρh)/∂x
+                q_grad = np.gradient(q, x)[cav_mask]
+                
+                # Time derivative of mass: ∂(θρh)/∂t = θ*ρ*dhdt + θ*h*drdp*dpdt + ρh*dθ/dt
+                # In cavitation, we want: dθ/dt = -[Ve*∂(θρh)/∂x + θ*ρ*dhdt + θ*h*drdp*dpdt] / (ρh)
+                drdp_cav = drdp[cav_mask]
+                dhdt_cav = dhdt[cav_mask]
+                dpdt_cav = dpdt_embed[cav_mask]
+                
+                # Update theta based on mass conservation
+                alpha_relax = 0.1  # relaxation factor
+                if np.abs(Ve) > 1e-6:
+                    # Full unsteady mass conservation
+                    dtheta_dt = -(q_grad + theta[cav_mask] * rho_cav * dhdt_cav + 
+                                 theta[cav_mask] * np.maximum(h_cav, 1e-12) * drdp_cav * dpdt_cav) / (
+                                 rho_cav * np.maximum(h_cav, 1e-12) + 1e-30)
+                    theta_update = alpha_relax * dts * dtheta_dt
+                else:
+                    # If Ve is very small, use simpler update
+                    dtheta_dt = -(theta[cav_mask] * rho_cav * dhdt_cav + 
+                                 theta[cav_mask] * np.maximum(h_cav, 1e-12) * drdp_cav * dpdt_cav) / (
+                                 rho_cav * np.maximum(h_cav, 1e-12) + 1e-30)
+                    theta_update = alpha_relax * dts * dtheta_dt
+                
+                theta[cav_mask] = _clamp01(theta[cav_mask] + theta_update)
             # --- Relax pressure on core & smooth slightly ---
             P_core_relaxed = (1.0 - relax_p) * P_old_nd + relax_p * P_new
             Ptmp = P_core_relaxed.copy()
+            
+            # Light smoothing to remove grid-scale noise
             if len(P_core_relaxed) >= 3:
                 P_core_relaxed[1:-1] = (
                     0.025 * Ptmp[:-2] + 0.95 * Ptmp[1:-1] + 0.025 * Ptmp[2:]
                 )
+            
+            # Enforce boundary conditions: P=0 at X=±1
             P_core_relaxed[0]  = 0.0
             P_core_relaxed[-1] = 0.0
+            
+            # Update previous state for next iteration (for squeeze term)
+            p_prev_sub = p_embed.copy()
+            h_nom_prev_sub = h.copy()
 
             p_core = P_core_relaxed * ph
 
@@ -1226,19 +1308,19 @@ PLOT_CTRL = {
         "pressure": {
             "ENABLE": True,
             "surface_state": 0,       # 0=UN, 1=TEXTURED, 2=BOTH
-            "angles_deg": [6],
+            "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
             "texture_densities": [5],
         },
         "film": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 0,
             "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
             "texture_densities": [5],
         },
         "asperity": {
-            "ENABLE": False,
+            "ENABLE": True,
             "surface_state": 0,
             "angles_deg": [-2,-5,2,6,-8,10],
             "rpms": [300],
