@@ -3,6 +3,8 @@
 ## Non-negotiable behavior
 You MUST work iteratively.
 keep Performing improve-cycles until all criteria pass.
+## Target runs (execute every cycle)
+Run python code in text file **"test6666.txt"** for only  --rpm 300 --angles -8, -2, 0, 2, 6, 31, -45
 
 Each improve-cycle MUST include:
 1) Run the verification runner (all requested angles)
@@ -23,9 +25,6 @@ Do NOT say "time is short" unless you have completed at least 8 cycles.
   - h >= h_floor (numerical only, <= 1e-12 to 1e-10 m range)
 - If you add any stabilization, it must be a standard numerical stabilization (e.g., upwind/Rusanov, active-set cavitation, under-relaxation), and you must justify it by which criterion it fixes.
 
-## Target runs (execute every cycle)
-Run:
-- test6666.txt --rpm 300 --angles -8, -2, 0, 2, 6, 31, -45
 
 ## Priority rules (what to fix first)
 Always fix in this order:
