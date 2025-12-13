@@ -1,29 +1,67 @@
-Read Python code in text file "test6666.txt" which is related to average friction torque reduction due to surface textures using 1D Mixed lubrication Line contact having compressible reynolds equation solution in CAM and tappet mechanism. And cam lift data "updated_lift.txt".
+# Codex Agent: Reynolds/EHL Verification Protocol (1D Line Contact CAM–Tappet)
 
-*Useful other code samples to keep in mind for the physics (for your help):*
-EHL_01_setup_Study_A_gen.txt
-EHL_01_setup_Study_A2_gen.txt
-EHL_01_setup_Study_A3_gen.txt
-MATLAB_REFERENCE.txt
-python_slippy.txt
+## Objective
+Make the Reynolds + cavitation + load-balance solution numerically verified and stable.
+Do not stop early. Continue iterating until all acceptance criteria pass.
 
-*TASK:*
-The current code in "test6666.txt" shows unstable reynolds pressure profile for cam angles around nose region (-20° to 20°) due to which there are too much fluctuations in asperity friction and hydrodynamic frictiom profile around cam nose region only.
+## Files
+- Primary script: test6666.txt
+- Create a verification runner: verify_reynolds.py (new)
 
-Your goal is to physically improve the Reynolds solver (especially the Couette and squeeze terms, cavitation treatment, Substeping etc.) until the predicted pressure profile for a reference cam–tappet case matches a standard elastohydrodynamic “Hertz-like” dome: smooth, roughly symmetric around the contact centre, zero far outside the contact, and with realistic width and peak.
+## Required Run Commands
+1) python verify_reynolds.py --rpm 300 --angles -8 -2 0 2 6 31 -45
+Run every time the solver changes.
 
-Run the script and print the data of reynolds pressure p vs x axis at 300 rpm, at -5°, 2 and -8  cam angles and for untexture case only. Then analyze the data trend of p over every point on x. Then You must have to deeply analyze the entire def solve theta and every term of reynolds equation. And find the true real causes and fix it and re-print the pressure data vs x axis. If pressure profile meet the target profile then stop else keep optimizing physics.
-Take any help from above mentioned sample codes.
+## Angles
+Use the nearest available TH_DEG entry to each requested angle.
 
-*TARGET PROFILE:* For this reference case, the pressure profile p(x) should have these properties:
+## Acceptance Criteria (must all pass)
+For each angle:
 
-Dome-like shape Single dominant maximum in the central region of the contact. No unphysical spikes at grid scale (no narrow needle peaks).
+A) Load balance closure:
+- abs((Wh+Wa)-Wext)/max(Wext,1e-30) <= 5e-4
 
-Approximate symmetry After non-dimensionalization, p*(x*) should be approximately symmetric: p*(x*) ≈ p*(-x*).
+B) Complementarity (Elrod–Adams):
+- min(p) >= -1e-12*ph
+- min(theta) >= -1e-6 and max(theta) <= 1+1e-6
+- max( (p/ph)*(1-theta) ) <= 1e-6
 
-Finite contact width The main “Hertz-like” contact must be contained in a finite interval [-a, a]. Outside roughly |x| > 1.2 a, pressure should be essentially zero (numerically ≪ peak). Also pressure must not be shrank before -a or +a.
+C) Discrete Reynolds residual on the solved pressure grid:
+- eps_R_L2 = ||L(P)-RHS||2/(||RHS||2+1e-30) <= 1e-3
+- eps_R_Linf = max|L(P)-RHS| <= 5e-3*max(|RHS|)+1e-30
 
-CONSTRAINTS: The main function to improve is solve_theta in the Python code.
+D) Cavitation front flux continuity:
+- Identify downstream cavitation boundary index ic (after p peak where p<thr and theta<1)
+- Relative flux jump across ic <= 1%
 
-Do not introduce non-physical hacks such as arbitrary clamping of pressure or film thickness. All changes must have a clear physical interpretation.
-TESTING & ACCEPTANCE: Keep optiming physics, keep printing p vs x axis until you meet the target. Once target achieved then provide updated reafy to paste script for me.
+E) Profile shape stability:
+- p has exactly one local maximum in |x|<=a (untextured runs)
+- downstream cutoff x_cut where p falls to ~0 after peak satisfies: 0.85a <= x_cut <= 1.10a
+- max_{|x|>a} p / pmax <= 1e-6
+
+F) Grid convergence (run at Nx=271,401,601 for rpm=300 angles -8,0,6):
+- pmax difference between 401 and 601 <= 2%
+- hmin difference between 401 and 601 <= 2%
+- load closure still within tolerance
+
+G) Initial-condition independence:
+- Re-run each angle with p_init=0 and p_init=Hertz; final pmax and hmin differ <= 2%
+
+## Output Requirements (print every run)
+For each (rpm,angle):
+- R, Ve, Vs, Wext
+- a, ph, pmax, hmin, h0, Wh, Wa, load_err_rel
+- eps_C (complementarity), eps_R_L2, eps_R_Linf
+- cavitation boundary x_cut and flux jump
+- peak count, leakage ratio max(|x|>a) p/pmax
+- runtime per solve
+
+Also print PASS/FAIL per criterion.
+
+## Implementation Notes (do not ignore)
+- Any artificial mobility floor, hard clamping of physical variables (beyond p>=0, 0<=theta<=1, h>=h_floor), or nonphysical scaling must be justified or removed.
+- If residuals pass but shapes are wrong, treat it as a boundary/cavitation-set identification issue.
+- If shapes pass but residual is large, treat as discretization inconsistency.
+
+## Completion
+Do not claim completion until ALL criteria A–G pass for both rpm sets.
