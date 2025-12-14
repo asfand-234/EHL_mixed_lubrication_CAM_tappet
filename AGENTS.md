@@ -3,7 +3,7 @@
 ## CODE
 Read the python code in text file "test6666.txt" and run the script for only  --rpm 300 -- cam angles -8, -2, 0, 2, 6, 31, -45
 For each angle print: Wext, h0, pmax, hmin, Wh, Wa, rel_load_err
-Also print runtime per solve_theta.
+
 ## Acceptance criteria 
 *(must pass for all angles at rpm=300)*
 
@@ -25,10 +25,6 @@ Each Run you MUST include:
   - 0 <= theta <= 1
   - h >= h_floor (numerical only, <= 1e-12 to 1e-10 m range)
 - If you add any stabilization, it must be a standard numerical stabilization (e.g., upwind/Rusanov, active-set cavitation, under-relaxation), and you must justify it by which criterion it fixes.
-
-## Mandatory printed output (every cycle)
-
-- angle, rpm, R, Ve, Vs,
 
 ## Deliverable:
 once the criteria pass for all angles then provide only the updated code for me.
