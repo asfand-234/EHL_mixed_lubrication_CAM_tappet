@@ -1,5 +1,6 @@
 
 
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -659,7 +660,7 @@ def _clamp01(z):
 def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 atex_theta, shift_theta, d_texture,
                 Nx=271, iters=40, substep_cap=6, relax_p=0.7, relax_h=0.6,
-                M_core=301, observe=True, load_iters=10, load_tol=5e-4,
+                M_core=301, observe=True, load_iters=20, load_tol=5e-4,
                 h0_seed=None):
     """
     Mixed EHL line-contact solver for a single cam angle (quasi-steady).
@@ -1034,15 +1035,26 @@ def solve_theta(R, Ve, Vs, W, dt, angle_deg, rpm,
                 dh = h0_old - h0_prev
                 step = -load_residual * (dh / denom)
 
+            # If the secant direction would thicken in the wrong sense (e.g.,
+            # two successive residuals with the same sign), fall back to a
+            # damped load-line move to keep iterations monotone toward balance.
+            desired_dir = np.sign(load_residual) if load_residual != 0.0 else 0.0
+            if desired_dir != 0.0 and np.sign(step) != desired_dir:
+                step = 0.3 * h0_old * desired_dir
+
             # Limit step to ±50% of current h0
-            max_step = 0.5 * h0_old
+            max_step = 1.0 * h0_old
             step = float(np.clip(step, -max_step, max_step))
             h0_new = h0_old + step
         else:
-            # First iteration: move 10% of h0_init in direction that reduces residual
-            direction = -np.sign(load_residual) if load_residual != 0.0 else -1.0
+            # First iteration: move 10% of h0_init in direction that reduces residual.
+            # When the computed load exceeds W_ext (positive residual), classical
+            # EHL load-line iterations (Hamrock & Dowson) thicken the film to shed
+            # load; if the load is too small, the gap is reduced. Use the residual
+            # sign directly so the first move nudges h0 in the physically consistent
+            # direction before the secant history exists.
+            direction = np.sign(load_residual) if load_residual != 0.0 else 1.0
             h0_new = h0_curr + 0.1 * h0_init * direction
-
         # Enforce positive separation
         h0_curr = float(max(h0_new, 1.0e-9))
 
