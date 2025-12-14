@@ -38,5 +38,5 @@ For each angle print:
 - a, ph, h0, pmax, hmin, Wh, Wa, rel_load_err
 Also print runtime per solve_theta.
 
-##Deliverable:
+## Deliverable:
 once the criteria pass for all angles then provide only the updated code for me.
