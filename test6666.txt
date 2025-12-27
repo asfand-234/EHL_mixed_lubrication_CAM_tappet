@@ -1,4 +1,5 @@
 
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import root
@@ -192,7 +193,29 @@ class EHLSolver:
         print("    Calc D Matrix done")
 
     # --- Physics ---
-    
+     # --- Physics ---
+
+    def calc_flow_factors(self, H_dimless):
+        """
+        Patir & Cheng (isotropic roughness) pressure and shear flow factors.
+        Lambda = h / sigma. For perfectly smooth surfaces, phi = 1.
+        """
+        if self.sigma_factor <= 0.0:
+            ones = np.ones_like(H_dimless)
+            return ones, ones
+
+        sigma_eff = self.sigma * self.sigma_factor
+        h_real = H_dimless * self.R
+        lambda_ratio = h_real / sigma_eff
+
+        # Physical floor: negative film thickness implies contact -> lambda = 0.
+        lambda_ratio = np.where(lambda_ratio < 0.0, 0.0, lambda_ratio)
+
+        # Patir & Cheng exponential fits (isotropic surfaces)
+        phi_x = 1.0 - 0.9 * np.exp(-0.56 * lambda_ratio)
+        phi_s = 1.0 - 0.9 * np.exp(-0.2 * lambda_ratio)
+
+        return phi_x, phi_s
     def ro(self, P_dim_less, T_K=None):
         # Dowson-Higginson Thermal
         if T_K is None: T_K = self.T_current
@@ -598,24 +621,27 @@ class EHLSolver:
         return beta * (self.delta_ad / self.A_C)
         
     def get_eps_beta(self, P, H):
-        idx = np.arange(2, self.N-1) 
+        idx = np.arange(2, self.N-1)
         
         rho = self.ro(P)
         mu = self.c_mu(P)
+        phi_x, _ = self.calc_flow_factors(H)
         
         rho_sum_1 = rho[idx] + rho[idx-1]
         mu_sum_1 = mu[idx] + mu[idx-1]
         H_sum_1 = H[idx] + H[idx-1]
+        phi_x_avg_1 = 0.5 * (phi_x[idx] + phi_x[idx-1])
         
         beta1 = self.beta_ad(P, H, 0)
-        eps1 = (rho_sum_1 * (H_sum_1**3) * 0.125 / mu_sum_1) + beta1
+        eps1 = (rho_sum_1 * (H_sum_1**3) * 0.125 * phi_x_avg_1 / mu_sum_1) + beta1
         
         rho_sum_2 = rho[idx] + rho[idx+1]
         mu_sum_2 = mu[idx] + mu[idx+1]
         H_sum_2 = H[idx] + H[idx+1]
+        phi_x_avg_2 = 0.5 * (phi_x[idx] + phi_x[idx+1])
         
         beta2 = self.beta_ad(P, H, 1)
-        eps2 = (rho_sum_2 * (H_sum_2**3) * 0.125 / mu_sum_2) + beta2
+        eps2 = (rho_sum_2 * (H_sum_2**3) * 0.125 * phi_x_avg_2 / mu_sum_2) + beta2
         
         return eps1, eps2
 
@@ -633,12 +659,13 @@ class EHLSolver:
         
         rho = self.ro(P_rey)
         drho = self.droo(P_rey)
+        _, phi_s = self.calc_flow_factors(H)
         
         # Couette Term Discretization
         # Use Upwind 1st Order for Stability to recover film thickness.
         # Central Difference was causing collapse to 4nm.
         term_couette = (self.u1d / self.dx) * (
-            rho[idx]*H[idx] - rho[idx-1]*H[idx-1]
+            rho[idx]*H[idx]*phi_s[idx] - rho[idx-1]*H[idx-1]*phi_s[idx-1]
         ) 
         
         term_squeeze = 0.0
@@ -1157,6 +1184,25 @@ class EHLSolver:
         P_rey_thm_nd = (P_rey_thm * self.P0_ref) / self.Pmh
         Pa_thm_nd = (Pa_thm * self.P0_ref) / self.Pmh
         
+        # Flow Factors (Thermal Final State)
+        phi_x_thm, phi_s_thm = self.calc_flow_factors(H_thm)
+        idx_hmin = np.argmin(H_thm)
+
+        print("\n=== TRANSIENT THERMAL RESULTS (FINAL STATE) ===")
+        print(f"Max Reynolds P (ND): {np.max(P_rey_thm_nd):.4f}")
+        print(f"Max Asperity P (ND): {np.max(Pa_thm_nd):.4f}")
+        print(f"Min Film H (ND): {np.min(H_thm):.4e} at X={X_thm[idx_hmin]:.4f} mm")
+        print(f"Central Film H (ND): {H_thm[len(H_thm)//2]:.4e}")
+
+        print("\n=== FLOW FACTOR IMPACT (Patir-Cheng) ===")
+        print(f"Phi_x range: [{np.min(phi_x_thm):.4f}, {np.max(phi_x_thm):.4f}]")
+        print(f"Phi_s range: [{np.min(phi_s_thm):.4f}, {np.max(phi_s_thm):.4f}]")
+        print(
+            "At H_min: "
+            f"Phi_x={phi_x_thm[idx_hmin]:.4f}, "
+            f"Phi_s={phi_s_thm[idx_hmin]:.4f}"
+        )
+
         # KEY DIAGNOSTIC: Location of Peaks
         idx_p_max = np.argmax(P_rey_thm_nd)
         idx_t_max = np.argmax(T_thm)
