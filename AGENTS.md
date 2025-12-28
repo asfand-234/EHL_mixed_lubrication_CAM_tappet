@@ -1,8 +1,8 @@
 Read and deeply analyze python code in text file "test6666.txt". It is 1D thermal, Transient mixed Lubrication Line contact in cam and tappet mechanism
 
 Your task is to optimize the numerical scheme and time dependent approach by replacing with below mention numerical loop to reduce overll cycle runtime while keep accuracy same.
-TESTING CRITERIA:
 
+TESTING CRITERIA:
 1) replace current approach with below numerical loop.
 2) Run every time entire code and monitor live load error, residual and runtime.
 3) Criteria:
