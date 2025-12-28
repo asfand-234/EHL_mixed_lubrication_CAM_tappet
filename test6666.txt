@@ -20,9 +20,9 @@ class EHLSolver:
         self.E2 = 210e9
         self.nu1 = 0.3
         self.nu2 = 0.3
-        self.E_prime = 2 / ((1 - self.nu1**2)/self.E1 + (1 - self.nu2**2)/self.E2)
+        self.E_prime = 217e9
         
-        self.B = 7.3e-3 # Roller Length (m)
+        self.B = 7.3e-3 # contact Length (m)
         self.R = None
         self.Um = None
         self.Um_mag = None
@@ -38,7 +38,7 @@ class EHLSolver:
         self.Cp = 2000.0 # J/kgK (Standard Oil Specific Heat)
         
         # Grid
-        self.N = 61 
+        self.N = 121 
         self.delta_ad = 0.05 # significantly reduced to sharpen spike and profile
         
         # Mixed Lubrication Parameters (Greenwood-Tripp)
@@ -55,12 +55,13 @@ class EHLSolver:
         self.beta0 = 0.04 # 1/K 
         self.gamma_therm = 6.5e-4 # 1/K 
         self.k_therm = 0.15 # W/mK 
-        
+        self.P_max = 5.0e9
+
         ln_eta0 = np.log(self.mu00)
         self.S0 = self.beta0 * (self.T0_K - 138.0) / (ln_eta0 + 9.67)
         self.Z_houper = self.alpha_input / (5.11e-9 * (ln_eta0 + 9.67))
         
-        self.cam_data = self.load_cam_profile("/content/cam/updated_lift.txt")
+        self.cam_data = self.load_cam_profile("/content/am/updated_lift.txt")
         self.setup_grid(self.cam_data["max_a_over_r"])
     
         # State
@@ -116,7 +117,7 @@ class EHLSolver:
         }
 
     def setup_grid(self, max_a_over_r):
-        left = -6.0 * max_a_over_r
+        left = -4.0 * max_a_over_r
         right = 3.0 * max_a_over_r
         self.X_dim = np.linspace(left, right, self.N)
         self.dx = self.X_dim[1] - self.X_dim[0]
@@ -193,8 +194,7 @@ class EHLSolver:
     def ro(self, P_dim_less, T_K=None):
         # Dowson-Higginson Thermal
         if T_K is None: T_K = self.T_current
-        
-        P = np.maximum(P_dim_less * self.P0_ref, 0)
+        P = np.clip(P_dim_less * self.P0_ref, 0.0, self.P_max)
         
         # Density Pressure Part
         a = 0.6e-9
@@ -204,12 +204,13 @@ class EHLSolver:
         # Thermal Part
         DeltaT = T_K - self.T0_K
         term_T = (1 - self.gamma_therm * DeltaT)
+        term_T = np.maximum(term_T, 1e-3)
         
-        return term_p * term_T
+        return np.nan_to_num(term_p * term_T, nan=1.0, posinf=1e6, neginf=1e-6)
 
     def droo(self, P_dim_less, T_K=None):
         if T_K is None: T_K = self.T_current
-        P = np.maximum(P_dim_less * self.P0_ref, 0)
+        P = np.clip(P_dim_less * self.P0_ref, 0.0, self.P_max)
         
         a = 0.6e-9
         b = 1.7e-9
@@ -217,15 +218,16 @@ class EHLSolver:
         
         DeltaT = T_K - self.T0_K
         term_T = (1 - self.gamma_therm * DeltaT)
+        term_T = np.maximum(term_T, 1e-3)
         
-        return df_dP * self.P0_ref * term_T
+        return np.nan_to_num(df_dP * self.P0_ref * term_T, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Skipping dro2 (2nd deriv) as it's not strictly used in Newton K matrix often
     
     def c_mu(self, P_dim_less, T_K=None):
         # Houpert's Equation (Thermal)
         if T_K is None: T_K = self.T_current
-        P = np.maximum(P_dim_less * self.P0_ref, 0)
+        P = np.clip(P_dim_less * self.P0_ref, 0.0, self.P_max)
         
         ln_eta0 = np.log(self.mu00)
         C1 = ln_eta0 + 9.67
@@ -241,6 +243,7 @@ class EHLSolver:
         bracket = term_T_S0 * term_P_Z - 1.0
         
         exponent = C1 * bracket
+        exponent = np.clip(exponent, -50.0, 50.0)
         
         return self.mu00 * np.exp(exponent)
 
@@ -249,9 +252,9 @@ class EHLSolver:
         gamma = self.gamma_therm
         k = self.k_therm
         a_hertz = self.a_Hertz if self.a_Hertz > 0 else 1.0
-        P_real = P_dist * self.P0_ref
-        h = H_dist * self.R
-        h = np.maximum(h, 1e-9)
+        P_real = np.clip(P_dist * self.P0_ref, 0.0, self.P_max)
+        H_safe = np.clip(H_dist, 1e-12, 1e-2)
+        h = H_safe * self.R
         eta = self.c_mu(P_dist, self.T_current)
         T = self.T_current
         num_term_1 = um * T * gamma * h * P_real
@@ -266,6 +269,7 @@ class EHLSolver:
         Alpha_dist = denominator
         Heff_dist = h
         T_new = self.T0_K + Delta_T
+        T_new = np.clip(T_new, self.T0_K - 50.0, self.T0_K + 250.0)
         return T_new, Phi_dist, Alpha_dist, Heff_dist
     
     # --- Asperity Contact ---
@@ -278,11 +282,12 @@ class EHLSolver:
             # Grid H is h/R. So H_real = H * R.
             H_real = H_dimless * self.R
         Lambda = H_real / self.sigma
+        Lambda = np.clip(Lambda, 0.0, 4.0)
         
         # F_5/2 approximation (Zhu & Hu 2001 EHL)
         # F5/2(LAMBDA) approx 4.4084e-5 * (4 - LAMBDA)^6.804
         
-        mask = Lambda < 4.0
+        mask = Lambda <= 4.0
         Pa_real = np.zeros_like(Lambda)
         dPa_dH_real = np.zeros_like(Lambda)
         
@@ -330,26 +335,28 @@ class EHLSolver:
         
     def get_eps_beta(self, P, H):
         idx = np.arange(2, self.N-1)
-        
+        H_eff = np.clip(H, 1e-12, 1e-2)
         rho = self.ro(P)
         mu = self.c_mu(P)
-        phi_x, _ = self.calc_flow_factors(H)
+        phi_x, _ = self.calc_flow_factors(H_eff)
         
         rho_sum_1 = rho[idx] + rho[idx-1]
         mu_sum_1 = mu[idx] + mu[idx-1]
-        H_sum_1 = H[idx] + H[idx-1]
+        H_sum_1 = H_eff[idx] + H_eff[idx-1]
         phi_x_avg_1 = 0.5 * (phi_x[idx] + phi_x[idx-1])
         
         beta1 = self.beta_ad(P, H, 0)
         eps1 = (rho_sum_1 * (H_sum_1**3) * 0.125 * phi_x_avg_1 / mu_sum_1) + beta1
+        eps1 = np.nan_to_num(eps1, nan=0.0, posinf=0.0, neginf=0.0)
         
         rho_sum_2 = rho[idx] + rho[idx+1]
         mu_sum_2 = mu[idx] + mu[idx+1]
-        H_sum_2 = H[idx] + H[idx+1]
+        H_sum_2 = H_eff[idx] + H_eff[idx+1]
         phi_x_avg_2 = 0.5 * (phi_x[idx] + phi_x[idx+1])
         
         beta2 = self.beta_ad(P, H, 1)
         eps2 = (rho_sum_2 * (H_sum_2**3) * 0.125 * phi_x_avg_2 / mu_sum_2) + beta2
+        eps2 = np.nan_to_num(eps2, nan=0.0, posinf=0.0, neginf=0.0)
         
         return eps1, eps2
 
@@ -357,9 +364,10 @@ class EHLSolver:
     
     def calc_reynolds_residual(self, P_rey, H):
         idx = np.arange(2, self.N-1)
+        H_eff = np.clip(H, 1e-12, 1e-2)
         
         # Reynolds
-        eps1, eps2 = self.get_eps_beta(P_rey, H)
+        eps1, eps2 = self.get_eps_beta(P_rey, H_eff)
         
         term_pois = (self.A_C / self.dx**2) * (
             P_rey[idx-1]*eps1 - P_rey[idx]*(eps1+eps2) + P_rey[idx+1]*eps2
@@ -367,18 +375,18 @@ class EHLSolver:
         
         rho = self.ro(P_rey)
         drho = self.droo(P_rey)
-        _, phi_s = self.calc_flow_factors(H)
+        _, phi_s = self.calc_flow_factors(H_eff)
         
         # Couette Term Discretization
         # Use Upwind 1st Order for Stability to recover film thickness.
         # Central Difference was causing collapse to 4nm.
         term_couette = (self.u1d / self.dx) * (
-            rho[idx]*H[idx]*phi_s[idx] - rho[idx-1]*H[idx-1]*phi_s[idx-1]
+            rho[idx]*H_eff[idx]*phi_s[idx] - rho[idx-1]*H_eff[idx-1]*phi_s[idx-1]
         ) 
         
         term_squeeze = 0.0
         if self.is_transient and self.rho_old is not None:
-             term_time = (rho[idx]*H[idx] - self.rho_old[idx]*self.H_old[idx]) / self.dt
+             term_time = (rho[idx]*H_eff[idx] - self.rho_old[idx]*self.H_old[idx]) / self.dt
              term_squeeze = (self.R / self.Um_mag) * term_time
              
         f1 = self.gamma_h * np.minimum(P_rey[idx], 0)
@@ -400,10 +408,14 @@ class EHLSolver:
         
         P_rey = np.zeros(self.N)
         P_rey[2:-1] = P_inner
+        p_limit = self.P_max / self.P0_ref
+        P_rey = np.clip(P_rey, -p_limit, p_limit)
+        p_limit = self.P_max / self.P0_ref
+        P_rey = np.clip(P_rey, -p_limit, p_limit)
         
         H = np.zeros(self.N)
         H[2:-1] = H_inner
-        
+        H = np.clip(H, -1e-3, 1e-2)
         # FIX: Initialize boundaries to Rigid shape to avoid H=0 -> Pa=Max
         H[0] = H0 + (self.X[0]**2)/2
         H[1] = H0 + (self.X[1]**2)/2
