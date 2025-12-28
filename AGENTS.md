@@ -1,58 +1,22 @@
-Read and deeply analyze python code in text file "test6666.txt". It is 1D thermal, Transient mixed Lubrication Line contact in cam and tappet mechanism
+Read and deeply analyze the python code in text file "test6666.txt". It is study of 1D thermal, transient Mixed LubricationLine contact for cam and flat faced follower.
 
-Your task is to optimize the numerical scheme and time dependent approach by replacing with below mention numerical loop to reduce overll cycle runtime while keep accuracy same.
+The current code generate pressure graphs and film thickness graph which us worser and unstable. Reynolds pressure is spreading everywhere away from its contact zone and there is negative pressure generated for few cam angles. Also film thicknes profile showing very worsr and unrealistic behaviour. Also residual error is greater.
 
-TESTING CRITERIA:
-1) replace current approach with below numerical loop.
-2) Run every time entire code and monitor live load error, residual and runtime.
-3) Criteria:
-Load error < 1% (even 0.3% is acceptable)
-Residual < 1e-7 
-Total cycle runtime <160 seconds.
-4) If any step fail in any above criteria then keep optimizing and keep fixing root cause and keep running the code and analyzing by yourself.
+You need to more deep dive into entire study And make all necessary corrections to make the entire study robust, but accurate.
 
-Numerical loop:
+Deeply analyze every physics, discretization, loop, initialization, coupling, convergence, time stepping, jacobian, velocity reversal, sign changes during cycle, regime change of lubricant from flanks to nos, cavitation  etc. etc. And everything and make necessary fixes as per standard literature and open source sample codes available on git.hub.com.
 
-START
-  |
-  v
-Initialize u(t0), choose method (BDF / gen-α), tolerances, dt0, order q
-  |
-  v
-WHILE t < t_end:
-    |
-    v
-  (1) Predict u_guess at t+dt using history (BDF predictor / extrapolation)
-    |
-    v
-  (2) Nonlinear solve for this time step:
-        set k = 0
-        decide Jacobian update policy (often: build J only at k=0)
-        REPEAT:
-            - Assemble residual R(u^(k)) including implicit time terms
-            - If k==0 (or policy says update): assemble/update Jacobian J
-            - Solve linear system:  J * Δu = -R   (sparse direct or Krylov+PC)
-            - Damping/line search: u^(k+1) = u^(k) + λ * Δu
-            - Check nonlinear convergence
-            - k = k + 1
-        UNTIL converged OR max iters
-    |
-    v
-  (3) If NOT converged:
-        dt = dt * shrink_factor
-        possibly reduce order q
-        retry step
-    |
-    v
-  (4) If converged:
-        estimate local time error (BDF LTE controller)
-        if error acceptable:
-            accept step: t = t + dt, store history, maybe increase dt and/or q
-        else:
-            reject step: dt = dt * shrink_factor, retry
-  |
-  v
-END WHILE
-  |
-  v
-OUTPUT u(t) over [t0, t_end]
+So that:
+
+1) Load error <1%
+2) residual <1e-6
+3) Total cycle runtime <160 seconds
+4) No negative pressure and negative film thickness. And both non-dimensional pressures must have correct magnitude for each cam angle i.e. sum of max. Non dimesnsional reynolds pressure + max. Non dimensional asperity pressure = 1 (with <10% error) 
+5) Both reynolds pressure and asperity pressure must lie on its contact zone having correct shape as per standard theory (hertzian like shape having cavitation spike near exit) but without non-physical or artificial clamps, clipping and scaling rather it must be pure physics base.
+
+HARD STRICT RULES:
+1) Do not change Kinematics formulas
+2) Do not change input fixed geometry,  material and roughness parameters except grid size, iterations and domain and any physical scalat factor value verified from literature.
+
+
+Keep doing deep research and keep optimizing untill entire study meet all 5 criteria
