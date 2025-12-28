@@ -1,0 +1,436 @@
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+/workspace/optimized_ehl_solver.py:566: MatrixRankWarning: Matrix is exactly singular
+  dV = spsolve(J, -F_val)
+Optimized EHL Solver Init
+Step 1/329 | Load err=2.5411e-01 | Res=2.6769e-01 | Iters=0 | Step time=0.044s | Total time=0.0s
+Step 2/329 | Load err=2.6742e-01 | Res=2.7990e-01 | Iters=0 | Step time=0.039s | Total time=0.1s
+Step 3/329 | Load err=2.7915e-01 | Res=2.9068e-01 | Iters=0 | Step time=0.039s | Total time=0.1s
+Step 4/329 | Load err=2.7296e-01 | Res=2.8465e-01 | Iters=0 | Step time=0.039s | Total time=0.2s
+Step 5/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.021s | Total time=0.2s
+Step 6/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 7/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 8/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 9/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 10/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 11/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 12/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 13/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 14/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 15/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 16/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 17/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 18/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 19/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 20/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 21/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 22/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 23/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 24/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 25/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 26/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 27/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 28/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 29/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 30/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 31/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 32/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 33/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 34/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 35/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 36/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 37/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 38/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 39/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 40/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 41/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 42/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 43/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 44/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 45/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 46/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 47/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 48/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 49/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 50/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 51/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 52/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 53/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 54/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 55/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 56/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 57/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 58/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 59/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 60/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 61/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 62/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 63/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 64/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 65/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 66/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 67/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 68/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 69/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 70/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 71/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 72/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 73/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 74/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 75/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 76/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 77/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 78/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 79/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 80/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 81/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 82/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 83/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 84/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.2s
+Step 85/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 86/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 87/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 88/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 89/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 90/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 91/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 92/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 93/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 94/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 95/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 96/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 97/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 98/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 99/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 100/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 101/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 102/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 103/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 104/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 105/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 106/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 107/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 108/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 109/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 110/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 111/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 112/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 113/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 114/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 115/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 116/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 117/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 118/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 119/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 120/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 121/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 122/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 123/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 124/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 125/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 126/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 127/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 128/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 129/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 130/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 131/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 132/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 133/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 134/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 135/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 136/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 137/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 138/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 139/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 140/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 141/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 142/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 143/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 144/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 145/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 146/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 147/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 148/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 149/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 150/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 151/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 152/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 153/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 154/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 155/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 156/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 157/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 158/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 159/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 160/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 161/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 162/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 163/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 164/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 165/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 166/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 167/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 168/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 169/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 170/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 171/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 172/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 173/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 174/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 175/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 176/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 177/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 178/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 179/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 180/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 181/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 182/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 183/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 184/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 185/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 186/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 187/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 188/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 189/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 190/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 191/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 192/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 193/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 194/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 195/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 196/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 197/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 198/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 199/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 200/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 201/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 202/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.3s
+Step 203/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 204/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 205/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 206/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 207/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 208/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 209/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 210/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 211/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 212/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 213/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 214/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 215/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 216/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 217/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 218/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 219/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 220/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 221/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 222/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 223/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 224/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 225/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 226/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 227/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 228/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 229/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 230/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 231/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 232/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 233/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 234/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 235/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 236/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 237/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 238/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 239/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 240/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 241/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 242/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 243/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 244/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 245/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 246/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 247/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 248/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 249/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 250/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 251/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 252/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 253/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 254/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 255/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 256/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 257/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 258/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 259/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 260/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 261/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 262/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 263/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 264/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 265/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 266/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 267/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 268/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 269/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 270/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 271/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.002s | Total time=0.4s
+Step 272/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 273/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 274/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 275/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 276/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 277/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 278/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 279/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 280/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 281/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 282/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 283/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 284/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 285/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 286/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 287/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 288/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 289/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 290/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 291/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 292/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 293/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 294/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 295/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 296/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 297/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 298/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 299/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 300/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 301/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 302/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 303/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 304/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 305/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 306/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 307/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 308/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 309/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 310/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 311/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 312/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 313/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 314/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 315/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 316/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 317/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 318/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.4s
+Step 319/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 320/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 321/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 322/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 323/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 324/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 325/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 326/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 327/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 328/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+Step 329/329 | Load err=nan | Res=nan | Iters=0 | Step time=0.001s | Total time=0.5s
+
+============================================================
+FINAL SUMMARY
+============================================================
+Total Runtime: 0.46 seconds
+Average Load Error: nan
+Max Load Error: nan
+Average Step Time: 0.001 seconds
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
+ ** On entry to DTRSV  parameter number  6 had an illegal value
+ ** On entry to DGEMV  parameter number  2 had an illegal value
