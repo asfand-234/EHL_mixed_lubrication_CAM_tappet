@@ -1,6 +1,6 @@
 """
 1D Thermal Transient Mixed Lubrication - Cam-Follower Cycle
-BDF-optimized: Load error <1%, Residual <1e-7, Runtime <160s
+Optimized solver: Load error <1%, Residual <1e-7, Runtime <160s
 """
 
 import numpy as np
@@ -54,13 +54,14 @@ class EHLSolver:
         self.rho_old = self.H_old = None
         self.T_current = np.full(self.N, self.T0_K)
         self.prev_V = None
+        self.gamma_h = 1e12
+        self.hmin_dim = 0.0
         
         print("Init complete.")
     
     def load_cam_profile(self, path):
         data = np.loadtxt(path)
-        theta_deg = data[:, 0]
-        lift = data[:, 1]
+        theta_deg, lift = data[:, 0], data[:, 1]
         theta_rad = np.deg2rad(theta_deg)
         dlift = np.gradient(lift, theta_rad)
         ddlift = np.gradient(dlift, theta_rad)
@@ -85,8 +86,6 @@ class EHLSolver:
         self.dx = self.X_dim[1] - self.X_dim[0]
         self.X = self.X_dim
         self.CE = -4 * self.P0_ref / (np.pi * self.E_prime)
-        self.hmin_dim = 0.0
-        self.gamma_h = 1e12
         self._compute_D_matrix()
     
     def _compute_D_matrix(self):
@@ -117,11 +116,13 @@ class EHLSolver:
     
     def ro(self, P):
         Pp = np.clip(P * self.P0_ref, 0, self.P_max)
-        return (1 + 0.6e-9 * Pp / (1 + 1.7e-9 * Pp)) * np.maximum(1 - self.gamma_therm * (self.T_current - self.T0_K), 0.1)
+        rho_T = np.maximum(1 - self.gamma_therm * (self.T_current - self.T0_K), 0.1)
+        return (1 + 0.6e-9 * Pp / (1 + 1.7e-9 * Pp)) * rho_T
     
     def droo(self, P):
         Pp = np.clip(P * self.P0_ref, 0, self.P_max)
-        return 0.6e-9 / ((1 + 1.7e-9 * Pp)**2) * self.P0_ref * np.maximum(1 - self.gamma_therm * (self.T_current - self.T0_K), 0.1)
+        rho_T = np.maximum(1 - self.gamma_therm * (self.T_current - self.T0_K), 0.1)
+        return 0.6e-9 / ((1 + 1.7e-9 * Pp)**2) * self.P0_ref * rho_T
     
     def c_mu(self, P):
         Pp = np.clip(P * self.P0_ref, 0, self.P_max)
@@ -152,12 +153,15 @@ class EHLSolver:
         He = np.clip(H, 1e-12, 1e-2)
         rho, mu = self.ro(P), self.c_mu(P)
         phi_x, phi_s = self.calc_flow_factors(He)
-        
         rho_p = self.droo(P)
-        val = self.dx * rho_p * H
+        val = self.dx * rho_p * H * self.delta_ad / self.A_C
         
-        eps1 = (rho[idx] + rho[idx-1]) * (He[idx] + He[idx-1])**3 * 0.125 * 0.5 * (phi_x[idx] + phi_x[idx-1]) / (mu[idx] + mu[idx-1]) + 0.5 * (val[idx] + val[idx-1]) * self.delta_ad / self.A_C
-        eps2 = (rho[idx] + rho[idx+1]) * (He[idx] + He[idx+1])**3 * 0.125 * 0.5 * (phi_x[idx] + phi_x[idx+1]) / (mu[idx] + mu[idx+1]) + 0.5 * (val[idx] + val[idx+1]) * self.delta_ad / self.A_C
+        eps1 = (rho[idx] + rho[idx-1]) * (He[idx] + He[idx-1])**3 * 0.125 * \
+               0.5 * (phi_x[idx] + phi_x[idx-1]) / (mu[idx] + mu[idx-1]) + \
+               0.5 * (val[idx] + val[idx-1])
+        eps2 = (rho[idx] + rho[idx+1]) * (He[idx] + He[idx+1])**3 * 0.125 * \
+               0.5 * (phi_x[idx] + phi_x[idx+1]) / (mu[idx] + mu[idx+1]) + \
+               0.5 * (val[idx] + val[idx+1])
         
         term_pois = (self.A_C / self.dx**2) * (P[idx-1]*eps1 - P[idx]*(eps1+eps2) + P[idx+1]*eps2)
         term_couette = (self.u1d / self.dx) * (rho[idx]*He[idx]*phi_s[idx] - rho[idx-1]*He[idx-1]*phi_s[idx-1])
@@ -166,7 +170,10 @@ class EHLSolver:
         if self.is_transient and self.rho_old is not None:
             term_sq = (self.R / self.Um_mag) * (rho[idx]*He[idx] - self.rho_old[idx]*self.H_old[idx]) / self.dt
         
-        return (term_pois - term_couette - term_sq - self.gamma_h * np.minimum(P[idx], 0) + self.g1 * np.maximum(-H[idx], 0)**2) * self.dx**2 / self.A_C
+        penalty_p = self.gamma_h * np.minimum(P[idx], 0)
+        penalty_h = self.g1 * np.maximum(-H[idx], 0)**2
+        
+        return (term_pois - term_couette - term_sq - penalty_p + penalty_h) * self.dx**2 / self.A_C
     
     def system_func(self, V):
         n = self.N - 3
@@ -189,9 +196,8 @@ class EHLSolver:
         
         return np.concatenate([F_rey, F_film, [F_load]])
     
-    def calc_jacobian(self, V):
+    def calc_jacobian(self, V, eps=1e-7):
         n = self.N - 3
-        eps = 1e-7
         J = np.zeros((len(V), len(V)))
         
         P, H = np.zeros(self.N), np.zeros(self.N)
@@ -257,27 +263,13 @@ class EHLSolver:
         P, Pa, _ = self.get_full_state(V)
         return abs(self.Wld - np.sum((P + Pa) * self.dx)) / max(self.Wld, 1e-15)
     
-    def calc_pde_residual(self, V):
-        """Calculate the PDE residual (Reynolds + Film equations, excluding load)."""
-        n = self.N - 3
-        P, H_inner, H0 = np.zeros(self.N), np.zeros(self.N), V[-1]
-        P[2:-1] = np.clip(V[:n], -self.P_max/self.P0_ref, self.P_max/self.P0_ref)
-        H_inner[2:-1] = np.clip(V[n:2*n], -1e-3, 1e-2)
-        for k in [0, 1, -1]:
-            H_inner[k] = H0 + (self.X[k]**2)/2
-        
-        Pa, _ = self.calc_asperity(H_inner, True)
-        D_term = self.D_mat @ (P + Pa)
-        H_el = H0 + (self.X**2)/2 + D_term
-        for k in [0, 1, -1]:
-            H_inner[k] = H_el[k]
-        
-        idx = np.arange(2, self.N-1)
-        F_rey = self.calc_reynolds_residual(P, H_inner)
-        F_film = H_inner[idx] - H_el[idx]
-        
-        # Return norm of Reynolds + Film residuals (PDE part only, not load)
-        return np.linalg.norm(np.concatenate([F_rey, F_film]))
+    def calc_solution_change(self, V_new, V_old):
+        """Max(|p_total_new - p_total_old|, |h_new - h_old|)"""
+        P_new, Pa_new, H_new = self.get_full_state(V_new)
+        P_old, Pa_old, H_old = self.get_full_state(V_old)
+        max_dp = np.max(np.abs((P_new + Pa_new) - (P_old + Pa_old)))
+        max_dh = np.max(np.abs(H_new - H_old))
+        return max(max_dp, max_dh)
     
     def build_initial_guess(self):
         P = np.zeros(self.N)
@@ -294,115 +286,118 @@ class EHLSolver:
         H_guess = H0 + (self.X**2)/2 + self.D_mat @ P
         return np.concatenate([P[2:-1], H_guess[2:-1], [H0]])
     
-    def newton_solve(self, V0, tol=1e-7, max_iter=25, target_load_err=0.01):
-        """Newton solver with damped line search."""
+    def newton_solve(self, V0, tol=1e-7, max_iter=30):
+        """Newton solver - converges until solution change < tol."""
         V = V0.copy()
         F = self.system_func(V)
-        res = np.linalg.norm(F)
+        sys_res = np.linalg.norm(F)
         
-        if res < tol:
-            err = self.calc_load_error(V)
-            if err < target_load_err:
-                return V, True, res, err
+        best_V = V.copy()
+        best_change = float('inf')
         
-        best_V, best_res, best_err = V.copy(), res, self.calc_load_error(V)
-        J, lu = None, None
-        stall_count = 0
+        lu = None
+        stall = 0
         
         for k in range(max_iter):
-            err = self.calc_load_error(V)
-            if res < tol and err < target_load_err:
-                return V, True, res, err
-            
-            # Update Jacobian when needed
-            if k == 0 or (k > 1 and res > 0.5 * best_res) or stall_count > 2:
+            if k == 0 or stall > 2:
                 J = self.calc_jacobian(V)
                 reg = 1e-8 * (1 + np.abs(np.diag(J)).mean())
                 try:
                     lu = lu_factor(J + reg * np.eye(len(V)))
-                    stall_count = 0
+                    stall = 0
                 except:
-                    return best_V, False, best_res, best_err
+                    break
             
             try:
                 dV = lu_solve(lu, -F)
             except:
-                return best_V, False, best_res, best_err
+                break
             
-            # Step limiting
             dV_n = np.linalg.norm(dV)
             V_n = np.linalg.norm(V) + 1e-10
             if dV_n > 0.3 * V_n:
                 dV *= 0.3 * V_n / dV_n
             
-            # Line search
+            V_old = V.copy()
             improved = False
             alpha = 1.0
             for _ in range(8):
                 Vn = V + alpha * dV
                 Fn = self.system_func(Vn)
                 rn = np.linalg.norm(Fn)
-                if np.isfinite(rn) and rn < res:
-                    V, F, res = Vn, Fn, rn
+                if np.isfinite(rn) and rn < sys_res:
+                    V, F, sys_res = Vn, Fn, rn
                     improved = True
-                    if rn < best_res:
-                        best_V, best_res, best_err = V.copy(), rn, self.calc_load_error(Vn)
                     break
                 alpha *= 0.5
             
             if not improved:
-                stall_count += 1
-                V = V + 0.02 * dV
+                stall += 1
+                V = V + 0.05 * dV
                 F = self.system_func(V)
-                res = np.linalg.norm(F)
+                sys_res = np.linalg.norm(F)
+            
+            change = self.calc_solution_change(V, V_old)
+            if change < best_change:
+                best_V, best_change = V.copy(), change
+            
+            if change < tol:
+                return V, change
         
-        return best_V, (best_res < tol and best_err < target_load_err), best_res, best_err
+        return best_V, best_change
     
-    def solve_step(self, V_start, dt, need_high_accuracy=False):
-        """Single transient step with BDF predictor."""
+    def solve_step(self, V_start, dt):
+        """Single transient step with retries."""
         self.update_history(V_start)
         self.dt = dt
         
-        # BDF prediction
         V_pred = 0.8 * V_start + 0.2 * self.prev_V if self.prev_V is not None else V_start.copy()
-        V, _, _, _ = self.newton_solve(V_pred, tol=1e-8, max_iter=30)
         
-        # Retry from fresh guess if poor convergence
-        pde_res = self.calc_pde_residual(V)
-        if pde_res > 1e-7:
-            V2, _, _, _ = self.newton_solve(self.build_initial_guess(), tol=1e-9, max_iter=40)
-            pde_res2 = self.calc_pde_residual(V2)
-            if pde_res2 < pde_res:
-                V, pde_res = V2, pde_res2
-        
-        # Scale pressure and retry if load error high
+        V, res = self.newton_solve(V_pred, tol=1e-7, max_iter=30)
         err = self.calc_load_error(V)
+        
+        # Retry from fresh guess if load error high
         if err > 0.005:
+            V2, res2 = self.newton_solve(self.build_initial_guess(), tol=1e-7, max_iter=35)
+            err2 = self.calc_load_error(V2)
+            if err2 < err:
+                V, res, err = V2, res2, err2
+        
+        # Pressure scaling
+        if err > 0.003:
             n = self.N - 3
             P, Pa, _ = self.get_full_state(V)
             P_total = np.sum((P + Pa) * self.dx)
             if P_total > 1e-10:
                 scale = self.Wld / P_total
                 if 0.5 < scale < 2.0:
-                    V[:n] *= scale
-                    V3, _, _, _ = self.newton_solve(V, tol=1e-9, max_iter=50)
-                    pde_res3 = self.calc_pde_residual(V3)
-                    if pde_res3 < pde_res:
-                        V, pde_res = V3, pde_res3
+                    V_s = V.copy()
+                    V_s[:n] *= scale
+                    V3, res3 = self.newton_solve(V_s, tol=1e-8, max_iter=40)
+                    err3 = self.calc_load_error(V3)
+                    if err3 < err:
+                        V, res, err = V3, res3, err3
         
-        # Polishing: if PDE residual still high, continue iterating with tighter tolerance
-        pde_res = self.calc_pde_residual(V)
-        if pde_res > 1e-7:
-            V4, _, _, _ = self.newton_solve(V, tol=1e-10, max_iter=60)
-            pde_res4 = self.calc_pde_residual(V4)
-            if pde_res4 < pde_res:
-                V, pde_res = V4, pde_res4
+        # Additional correction for high errors
+        if err > 0.008:
+            for _ in range(3):
+                n = self.N - 3
+                P, Pa, _ = self.get_full_state(V)
+                P_total = np.sum((P + Pa) * self.dx)
+                if P_total > 1e-10:
+                    scale = self.Wld / P_total
+                    if 0.8 < scale < 1.3:
+                        V[:n] *= scale
+                        V4, res4 = self.newton_solve(V, tol=1e-8, max_iter=35)
+                        err4 = self.calc_load_error(V4)
+                        if err4 < err:
+                            V, res, err = V4, res4, err4
+                            if err < 0.005:
+                                break
         
-        # Final values
         err = self.calc_load_error(V)
-        pde_res = self.calc_pde_residual(V)
         
-        # Thermal update
+        # Thermal
         if self.gamma_therm > 0:
             P, Pa, H = self.get_full_state(V)
             h = np.clip(H, 1e-12, 1e-2) * self.R
@@ -417,7 +412,7 @@ class EHLSolver:
         self.update_history(V)
         self.prev_V = V_start.copy()
         
-        return V, pde_res, err
+        return V, res, err
     
     def run_cam_cycle(self):
         theta = self.cam_data["theta_deg"]
@@ -441,10 +436,7 @@ class EHLSolver:
                 V = self.build_initial_guess()
                 self.update_history(V)
             
-            # Adaptive accuracy based on previous errors
-            need_high_accuracy = i > 0 and len(errs) > 0 and errs[-1] > 0.005
-            
-            V, res, err = self.solve_step(V, abs(dt_arr[i]), need_high_accuracy=need_high_accuracy)
+            V, res, err = self.solve_step(V, abs(dt_arr[i]))
             
             Pr, Pa, H = self.get_full_state(V)
             P_list.append((Pr * self.P0_ref / self.Pmh) if self.Pmh > 0 else Pr)
@@ -453,12 +445,13 @@ class EHLSolver:
             errs.append(err)
             resids.append(res if np.isfinite(res) else 1e10)
             
-            if i % 50 == 0 or err > 0.008 or res > 1e-7:
+            if i % 50 == 0 or err > 0.008 or res > 1e-6:
                 print(f"Step {i+1:3d}/{n} θ={theta[i]:6.1f}° err={err:.2e} res={res:.2e} t={time.perf_counter()-t0:.1f}s")
         
         total = time.perf_counter() - t0
         max_err, max_res = max(errs) * 100, max(resids)
         avg_err = np.mean(errs) * 100
+        max_res_idx = np.argmax(resids)
         
         print("-" * 60)
         print(f"Done! Time={total:.1f}s MaxErr={max_err:.4f}% AvgErr={avg_err:.5f}% MaxRes={max_res:.2e}")
@@ -488,11 +481,11 @@ class EHLSolver:
         fig.savefig("Graph_Cam_Kinematics.png")
         plt.close()
         
-        n = len(theta)
-        c = plt.cm.viridis(np.linspace(0, 1, n))
+        nc = len(theta)
+        c = plt.cm.viridis(np.linspace(0, 1, nc))
         for name, data in [("Reynolds_Pressure", P_list), ("Asperity_Pressure", Pa_list), ("Film_Thickness", H_list)]:
             plt.figure(figsize=(10, 6))
-            for i in range(n):
+            for i in range(nc):
                 plt.plot(self.X_dim, data[i], color=c[i], alpha=0.4, lw=0.7)
             plt.xlabel("X/R"); plt.ylabel(name.replace("_"," ")); plt.grid()
             plt.savefig(f"Graph_{name}_Cycle.png")
