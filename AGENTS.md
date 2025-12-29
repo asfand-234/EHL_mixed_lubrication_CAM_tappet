@@ -1,33 +1,23 @@
-Read and deeply analyze the python code in text file "test6666.txt". It is study of 1D thermal, transient Mixed LubricationLine contact for cam and flat faced follower.
+Read and deeply analyze the entire code in text file "test6666.txt" in main branch . It is 1D thermal Transient mixed lubrication Line contact with mass conserving reynolds equation in cam and tappet mechanism.
 
-Problem:
-Reynolds pressure is spreading away from its contact zone X [-1 1] and shifted towards left inlet for almost all cam angles. And cavitation spike is missing near exit.
-May be the boundary conditions, normalization, initialization, squeez term or h0 iteration is not perfect. You need to deeply analyze, perform some advance diagnostic checks calculations and do research from standard literature to find the root causes and keep fixing. Also, flat region on film thickness profile is also missing for many cam angles.
+TESTING CRITERIA:
+1)  Run the code and keep eye on load error, residual error especially after steps 118/329 onward. Try to optimize the convergence scheme so that the solver either never "retry: resetting to Hertzian guess" or only retry for 4 or 5 steps (currently more than 27 steps).
+2) The non-dimensional asperity pressure mgnitude is small. Fix it without non-physical scaling. See the criteria 6.
+3) Keep deep analyzing the code, keep optimizing numerical scheme and  convergence and keep running and monitoring results untill all below criteria are met.
 
-Task:
-Your task is to optimize the every model in the code and its mumerical scheme to meet below pasted criteria.
-(Just for a reference i have attached a sample graph in attached figure from a research article, you can analyze how perfectly shaped reynolds profile (blue) and asperity pressure profile (red) and their sum total pressure (black)).
-
-Load balance iterator and total pressure iteraror must so advance and physically correct to deal with state changes in cam cycle: flanks angles (low load, high velocity and radius) and nose angles (high load, low velocity and radius).
-Revsite every physics and calculate its values if needed and analyze if it is behaving correct or not. 
-Make sure the cavitation point is correctly determined and cavitation algorithem is perfectly working. 
-Deeply study from standard literature and sample codes and optimize the non-linearity density/viscosity coupling.
-The solver must behave more flexible for transition effect through purely physics base correction. Read MATLAB sample codes available on git.hub.com related to EHL (but my study must remain 1D Transient, thermal, mixed lubrication Line contact).
-
-Also keep optimizing enture study untill all cam angles meet all criteria. Add more necessary checks for printing live and keep eye on it.
-
-Target criteria:
-
+TARGET CRITERIA:
 1) Load error <1%
-2) residual <1e-6
-3) Total cycle runtime <160 seconds [once all correction achieved then do advanced optimization on convergence, initial guesses, time stepping etc and achieve this target.)
-4) No negative pressure and negative film thickness.
-5) both non-dimensional pressures must have correct magnitude for each cam angle i.e. sum of max. Non dimesnsional reynolds pressure + max. Non dimensional asperity pressure = 1 (with <10% error) 
-6) Both reynolds pressure and asperity pressure must lie on its contact zone having correct shape as per standard theory (hertzian like shape having cavitation spike near exit) but without non-physical or artificial clamps, clipping and scaling rather it must be pure physics base.
+2) Residual <1e-7
+3) Sum of max. Non. Dimensionl reynolds pressure and max. Non. Dimensional asperity pressure = 1 (10% error acceptable).
+4) Total cycle runtime <160 seconds
+5) No negative pressures and film thickness
+6) Bother pressures are accurately lie on its contact zone (no shrinkage, spreading) having cavitation spike near exit.
 
-HARD STRICT RULES:
-1) Do not change Kinematics formulas
-2) Do not change input fixed geometry,  material and roughness parameters except grid size, iterations and domain and any physical scalat factor value verified from literature.
+Keep optimizing until all 6 criteria meet. 
+You load balance iterator must be capable of dealing with lubricant regime change during cam cycle but pure physics base. 
 
-
-Keep doing deep research and keep optimizing untill entire study meet all 6 criteria
+Hard stricf Rules:
+1) Do not change kinematics formula.
+2) Do not change input  material and roughness parameter values.
+3) Do not implement any non-physical and artificial scaling, factor, clamps, clipping and constraints except for numerical stability.
+4) Try to keep grud N > 80 for better accuracy.
