@@ -1,23 +1,17 @@
-Read and deeply analyze the entire code in text file "test6666.txt" in main branch . It is 1D thermal Transient mixed lubrication Line contact with mass conserving reynolds equation in cam and tappet mechanism.
+Read and deeply analyze the entire code in "test6666.txt". It is 1D thermal Transient mixed lubrication Line contact with mass conserving reynolds equation in cam and tappet mechanism.
 
 TESTING CRITERIA:
-1)  Run the code and keep eye on load error, residual error especially after steps 118/329 onward. Try to optimize the convergence scheme so that the solver either never "retry: resetting to Hertzian guess" or only retry for 4 or 5 steps (currently more than 27 steps).
-2) The non-dimensional asperity pressure mgnitude is small. Fix it without non-physical scaling. See the criteria 6.
-3) Keep deep analyzing the code, keep optimizing numerical scheme and  convergence and keep running and monitoring results untill all below criteria are met.
+1) Run the code for 300 rpm only, and print data for hydrodynamic friction vs cam angle and asperity friction vs cam angle. 
+2) Then analyze why there are too much spikes/oscilations around nose region in hydrodynamic and asperity friction data. Then fix it . 
+3) Keep optimizing, and keep running and keep printing results untill below criteria 100% meet.
+4) Every correction must be purely physics base. Perform diagnostic tests to find root causes. also add limiting shear contribution in hydrodynamic friction and keep checking.
 
-TARGET CRITERIA:
-1) Load error <1%
-2) Residual <1e-7
-3) Sum of max. Non. Dimensionl reynolds pressure and max. Non. Dimensional asperity pressure = 1 (10% error acceptable).
-4) Total cycle runtime <160 seconds
-5) No negative pressures and film thickness
-6) Bother pressures are accurately lie on its contact zone (no shrinkage, spreading) having cavitation spike near exit.
+CRITERIA:
+1) Hydrodynamic friction must be maximum at both flanks and minumum around cam nose angles.
+2) Asperity friction must be maximum at nose angles and decreasing away from it like a belly shape.
+3) There must not be any oscilations or spikes throughout profile.
 
-Keep optimizing until all 6 criteria meet. 
-You load balance iterator must be capable of dealing with lubricant regime change during cam cycle but pure physics base. 
-
-Hard stricf Rules:
-1) Do not change kinematics formula.
-2) Do not change input  material and roughness parameter values.
-3) Do not implement any non-physical and artificial scaling, factor, clamps, clipping and constraints except for numerical stability.
-4) Try to keep grud N > 80 for better accuracy.
+Hard Strict Rules:
+1) Do not change kinematics formula
+2) Do not change input material and roughness parameters
+3) Do not implement any non-physical and artificial clamps, clipping, scaling, factor or constraints except for numerical stability.
