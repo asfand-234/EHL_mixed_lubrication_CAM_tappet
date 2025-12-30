@@ -1,976 +1,862 @@
-import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import time
+
 import os
-
-
-# ======================================================================================
-# 1) PHYSICS SECTION
-#    1D Transient Mixed Lubrication (Line Contact) with Mass-Conserving Reynolds Equation
-# ======================================================================================
-
-class EHLSolver:
-    def __init__(self, lift_file="updated_lift.txt"):
-        # ------------------------
-        # Reference / scaling
-        # ------------------------
-        self.P0_ref = 0.5e9  # Pa (pressure scale used in non-dimensionalization)
-
-        # ------------------------
-        # Lubricant viscosity model parameters (Houpert-like)
-        # ------------------------
-        self.mu00 = 0.01381
-        self.muinf = 6.315e-5
-        self.Pr = 1.98e8
-        self.alpha_input = 15e-9
-        self.z_input = 0.65
-
-        # ------------------------
-        # Elastic modulus (reduced)
-        # ------------------------
-        self.E_prime = 217e9  # Pa
-
-        # ------------------------
-        # Geometry / line-contact length (into-page length)
-        # NOTE: In your code, Wl = W / B, so B behaves as the line-contact length L.
-        # ------------------------
-        self.B = 7.3e-3  # m (contact length L)
-
-        # ------------------------
-        # Density/thermal parameters
-        # ------------------------
-        self.rho0 = 870.0
-        self.Cp = 2000.0
-
-        # ------------------------
-        # Discretization / transient
-        # ------------------------
-        self.N = 81
-        self.delta_ad = 0.05
-        self.is_transient = True
-        self.dt = None
-        self.rho_old = None
-        self.H_old = None
-
-        # ------------------------
-        # Roughness / asperity (Greenwood-Tripp-like fit you used)
-        # ------------------------
-        self.sigma = 0.2e-6
-        self.eta_beta_sigma = 0.05
-        self.sigma_beta_ratio = 0.001
-        self.K_GT = (16 * np.pi * np.sqrt(2) / 15) * (self.eta_beta_sigma**2) * np.sqrt(self.sigma_beta_ratio) * self.E_prime
-        self.sigma_factor = 1.0
-
-        # ------------------------
-        # Thermal model (as in your code)
-        # ------------------------
-        self.T0_C = 90.0
-        self.T0_K = self.T0_C + 273.15
-        self.beta0 = 0.04
-        self.gamma_therm = 6.5e-4
-        self.k_therm = 0.15
-
-        ln_eta0 = np.log(self.mu00)
-        self.S0 = self.beta0 * (self.T0_K - 138.0) / (ln_eta0 + 9.67)
-        self.Z_houper = self.alpha_input / (5.11e-9 * (ln_eta0 + 9.67))
-
-        # ------------------------
-        # Newton/penalty parameters (kept from your code)
-        # ------------------------
-        self.hmin_dim = 0.0
-        self.gamma_h = 1e12
-        self.g1 = None  # set when operating state is updated
-
-        # ------------------------
-        # Boundary friction coefficient (asperity friction)
-        # Adjust as needed for your boundary regime (typical range ~0.05–0.12)
-        # ------------------------
-        self.mu_b = 0.12
-
-        # ------------------------
-        # Internal state variables updated per step
-        # ------------------------
-        self.R = None
-        self.Um = None
-        self.Um_mag = None
-        self.Um_sign = None
-        self.Vs = None
-        self.W = None
-
-        # ------------------------
-        # Load lift profile (theta, lift, derivatives). Kinematics computed per RPM.
-        # ------------------------
-        self.profile = self.load_lift_profile(lift_file)
-
-        # Temperature field
-        self.T_current = np.full(self.N, self.T0_K)
-
-        # Grid placeholders (initialized per RPM once max_a_over_r is known)
-        self.X_dim = None
-        self.X = None
-        self.dx = None
-        self.D_mat = None
-        self.CE = -4 * self.P0_ref / (np.pi * self.E_prime)
-
-    # ------------------------
-    # Profile / kinematics
-    # ------------------------
-    def load_lift_profile(self, path):
-        if not os.path.exists(path):
-            alt = r"/content/cam/updated_lift.txt"
-            if os.path.exists(alt):
-                path = alt
-
-        data = np.loadtxt(path)
-        theta_deg = data[:, 0]
-        lift = data[:, 1]
-        theta_rad = np.deg2rad(theta_deg)
-
-        dlift = np.gradient(lift, theta_rad)
-        ddlift = np.gradient(dlift, theta_rad)
-
-        rb = 18.4e-3  # m (base circle radius)
-
-        return {
-            "theta_deg": theta_deg,
-            "theta_rad": theta_rad,
-            "lift": lift,
-            "dlift": dlift,
-            "ddlift": ddlift,
-            "rb": rb
-        }
-
-    def compute_cam_kinematics(self, rpm):
-        theta_deg = self.profile["theta_deg"]
-        theta_rad = self.profile["theta_rad"]
-        lift = self.profile["lift"]
-        dlift = self.profile["dlift"]
-        ddlift = self.profile["ddlift"]
-        rb = self.profile["rb"]
-
-        omega = (2 * np.pi * rpm) / 60.0
-
-        # Keep your original definitions (do not change physics here)
-        Vc = (rb + lift + ddlift) * omega
-        Vf = omega * ddlift
-        um = (Vf + Vc) / 2.0
-        Vs = Vc - Vf
-        R = ddlift + lift + rb
-
-        # Spring-mass load model (as in your code)
-        K_spring = 7130.0
-        delta = 1.77e-3
-        M_eq = 0.05733
-        F = K_spring * (lift + delta) + ddlift * M_eq * omega**2
-
-        # Transient step sizes
-        dt = np.gradient(theta_rad) / omega
-        time_arr = (theta_rad - theta_rad[0]) / omega
-
-        # Estimate max_a_over_r for grid sizing
-        Wl = np.maximum(F, 0.0) / self.B
-        R_eff = np.maximum(R, 1e-12)
-        a_hertz = np.sqrt(8 * Wl * R_eff / (np.pi * self.E_prime))
-        a_over_r = a_hertz / R_eff
-        max_a_over_r = np.max(a_over_r)
-
-        return {
-            "rpm": rpm,
-            "omega": omega,
-            "theta_deg": theta_deg,
-            "theta_rad": theta_rad,
-            "lift": lift,
-            "um": um,
-            "Vs": Vs,
-            "R": R,
-            "F": F,
-            "dt": dt,
-            "time": time_arr,
-            "max_a_over_r": max_a_over_r,
-            "rb": rb,
-            "Vc": Vc,
-            "Vf": Vf,
-        }
-
-    # ------------------------
-    # Grid + elastic influence matrix
-    # ------------------------
-    def setup_grid(self, max_a_over_r):
-        left = -5.0 * max_a_over_r
-        right = 3.0 * max_a_over_r
-        self.X_dim = np.linspace(left, right, self.N)     # dimensionless x/R
-        self.X = self.X_dim.copy()
-        self.dx = self.X_dim[1] - self.X_dim[0]
-        self.calculate_D_matrix()
-
-        # Reset thermal and transient history for a fresh run
-        self.T_current = np.full(self.N, self.T0_K)
-        self.rho_old = None
-        self.H_old = None
-
-    def calculate_D_matrix(self):
-        N = self.N
-        dx = self.dx
-        D = np.zeros((N, N))
-        b = dx / 2.0
-
-        for i in range(N):
-            xi = self.X_dim[i]
-            for j in range(N):
-                xj = self.X_dim[j]
-                d1 = xi - (xj - b)
-                d2 = xi - (xj + b)
-
-                def F(u):
-                    if abs(u) < 1e-12:
-                        return 0.0
-                    return u * np.log(abs(u)) - u
-
-                D[i, j] = (F(d1) - F(d2))
-
-        self.D_mat = D * self.CE
-
-    # ------------------------
-    # Operating state updates
-    # ------------------------
-    def update_operating_state(self, um, vs, R, load):
-        self.Um = um
-        self.Vs = vs
-        self.R = max(R, 1e-12)  # avoid non-physical / division issues
-        self.W = load
-
-        self.Um_mag = max(abs(self.Um), 1e-9)
-        self.Um_sign = 1.0 if self.Um >= 0 else -1.0
-
-        # Scaling used in your Reynolds residual
-        self.A_C = self.R * self.P0_ref / (12 * self.mu00 * self.Um_mag)
-        self.u1d = self.Um_sign
-
-        # Hertz reference quantities
-        Wl = self.W / self.B
-        self.a_Hertz = np.sqrt(8 * Wl * self.R / (np.pi * self.E_prime)) if Wl > 0 else 0.0
-        self.Pmh = 2 * Wl / (np.pi * self.a_Hertz) if self.a_Hertz > 0 else 0.0
-
-        # Load non-dimensionalization used in your constraint
-        self.Wld = Wl / (self.R * self.P0_ref)
-
-        Rey_Stiffness = self.A_C / (self.dx**2)
-        self.g1 = 1e15 * Rey_Stiffness
-
-    # ------------------------
-    # Flow factors
-    # ------------------------
-    def calc_flow_factors(self, H_dimless):
-        if self.sigma_factor <= 0.0:
-            ones = np.ones_like(H_dimless)
-            return ones, ones
-
-        sigma_eff = self.sigma * self.sigma_factor
-        h_real = H_dimless * self.R
-        lambda_ratio = h_real / sigma_eff
-        lambda_ratio = np.where(lambda_ratio < 0.0, 0.0, lambda_ratio)
-
-        phi_x = 1.0 - 0.9 * np.exp(-0.56 * lambda_ratio)  # pressure flow factor
-        phi_s = 1.0 - 0.9 * np.exp(-0.2 * lambda_ratio)   # shear flow factor
-        return phi_x, phi_s
-
-    # ------------------------
-    # Density / viscosity
-    # ------------------------
-    def ro(self, P_dim_less, T_K=None):
-        if T_K is None:
-            T_K = self.T_current
-        P = np.maximum(P_dim_less * self.P0_ref, 0.0)
-        a = 0.6e-9
-        b = 1.7e-9
-        term_p = (1 + (a * P) / (1 + b * P))
-        DeltaT = T_K - self.T0_K
-        term_T = (1 - self.gamma_therm * DeltaT)
-        return term_p * term_T
-
-    def droo(self, P_dim_less, T_K=None):
-        if T_K is None:
-            T_K = self.T_current
-        P = np.maximum(P_dim_less * self.P0_ref, 0.0)
-        a = 0.6e-9
-        b = 1.7e-9
-        df_dP = a / ((1 + b * P) ** 2)
-        DeltaT = T_K - self.T0_K
-        term_T = (1 - self.gamma_therm * DeltaT)
-        return df_dP * self.P0_ref * term_T
-
-    def c_mu(self, P_dim_less, T_K=None):
-        if T_K is None:
-            T_K = self.T_current
-        P = np.maximum(P_dim_less * self.P0_ref, 0.0)
-
-        ln_eta0 = np.log(self.mu00)
-        C1 = ln_eta0 + 9.67
-
-        T_term = (T_K - 138.0) / (self.T0_K - 138.0)
-        T_term = np.maximum(T_term, 1e-5)
-        term_T_S0 = T_term ** (-self.S0)
-
-        term_P_Z = (1 + P / self.Pr) ** self.Z_houper
-        exponent = C1 * (term_T_S0 * term_P_Z - 1.0)
-
-        exponent = np.minimum(exponent, 50.0)
-        return self.mu00 * np.exp(exponent)
-
-    # ------------------------
-    # Thermal update (kept as-is)
-    # ------------------------
-    def calc_temperature_rise(self, P_dist, H_dist, Pa_dist=None):
-        um = self.Um_mag
-        gamma = self.gamma_therm
-        k = self.k_therm
-        a_hertz = self.a_Hertz if self.a_Hertz > 0 else 1.0
-
-        P_real = P_dist * self.P0_ref
-        h = np.maximum(H_dist * self.R, 1e-9)
-
-        eta = self.c_mu(P_dist, self.T_current)
-        T = self.T_current
-
-        num_term_1 = um * T * gamma * h * P_real
-        num_term_2 = (2.0 * a_hertz * eta * um**2) / h
-
-        den = (a_hertz * k) / h - um * gamma * h * P_real
-        den = np.where(den < 1e-5, 1e-5, den)
-
-        Delta_T = (num_term_1 + num_term_2) / den
-        T_new = self.T0_K + Delta_T
-        return T_new
-
-    # ------------------------
-    # Asperity pressure model
-    # ------------------------
-    def calc_asperity(self, H_dimless, calc_deriv=False):
-        H_real = H_dimless * self.R
-        Lambda = H_real / self.sigma
-        mask = Lambda < 4.0
-
-        Pa_real = np.zeros_like(Lambda)
-        dPa_dH_real = np.zeros_like(Lambda)
-
-        if np.any(mask):
-            val = 4.0 - Lambda[mask]
-            A_fit = 4.4084e-5
-            Z_fit = 6.804
-            F_stat = A_fit * (val ** Z_fit)
-            dF_dL = -A_fit * Z_fit * (val ** (Z_fit - 1))
-
-            Pa_real[mask] = self.K_GT * F_stat * self.sigma_factor
-            if calc_deriv:
-                dPa_dH_real[mask] = (self.K_GT * dF_dL * self.sigma_factor) / self.sigma
-
-        Pa_dim = Pa_real / self.P0_ref
-        if calc_deriv:
-            return Pa_dim, (dPa_dH_real * self.R) / self.P0_ref
-        return Pa_dim
-
-    # ------------------------
-    # Mass-conserving Reynolds residual helpers
-    # ------------------------
-    def beta_ad(self, P, H, eps_shift):
-        idx = np.arange(2, self.N - 1)
-        rho_prime = self.droo(P)
-        val = self.dx * rho_prime * H
-        if eps_shift == 0:
-            beta = 0.5 * (val[idx] + val[idx - 1])
-        else:
-            beta = 0.5 * (val[idx] + val[idx + 1])
-        return beta * (self.delta_ad / self.A_C)
-
-    def get_eps_beta(self, P, H):
-        idx = np.arange(2, self.N - 1)
-        rho = self.ro(P)
-        mu = self.c_mu(P)
-        phi_x, _ = self.calc_flow_factors(H)
-
-        rho_1 = rho[idx] + rho[idx - 1]
-        mu_1 = mu[idx] + mu[idx - 1]
-        H_1 = H[idx] + H[idx - 1]
-        phi_1 = 0.5 * (phi_x[idx] + phi_x[idx - 1])
-        eps1 = (rho_1 * (H_1 ** 3) * 0.125 * phi_1 / mu_1) + self.beta_ad(P, H, 0)
-
-        rho_2 = rho[idx] + rho[idx + 1]
-        mu_2 = mu[idx] + mu[idx + 1]
-        H_2 = H[idx] + H[idx + 1]
-        phi_2 = 0.5 * (phi_x[idx] + phi_x[idx + 1])
-        eps2 = (rho_2 * (H_2 ** 3) * 0.125 * phi_2 / mu_2) + self.beta_ad(P, H, 1)
-
-        return eps1, eps2
-
-    def calc_reynolds_residual(self, P_rey, H):
-        idx = np.arange(2, self.N - 1)
-        eps1, eps2 = self.get_eps_beta(P_rey, H)
-
-        term_pois = (self.A_C / self.dx**2) * (
-            P_rey[idx - 1] * eps1 - P_rey[idx] * (eps1 + eps2) + P_rey[idx + 1] * eps2
-        )
-
-        rho = self.ro(P_rey)
-        _, phi_s = self.calc_flow_factors(H)
-
-        term_couette = (self.u1d / self.dx) * (
-            rho[idx] * H[idx] * phi_s[idx] - rho[idx - 1] * H[idx - 1] * phi_s[idx - 1]
-        )
-
-        term_squeeze = 0.0
-        if self.is_transient and self.rho_old is not None:
-            term_time = (rho[idx] * H[idx] - self.rho_old[idx] * self.H_old[idx]) / self.dt
-            term_squeeze = (self.R / self.Um_mag) * term_time
-
-        f1 = self.gamma_h * np.minimum(P_rey[idx], 0.0)
-        f4 = self.g1 * np.maximum(self.hmin_dim - H[idx], 0.0) ** 2
-
-        F_rey = term_pois - term_couette - term_squeeze - f1 + f4
-        return F_rey * (self.dx**2 / self.A_C)
-
-    # ------------------------
-    # Full nonlinear system: Reynolds + film equation + load balance
-    # ------------------------
-    def system_func(self, V):
-        n_inner = self.N - 3
-        P_inner = V[:n_inner]
-        H_inner = V[n_inner:2 * n_inner]
-        H0 = V[-1]
-
-        P_rey = np.zeros(self.N)
-        P_rey[2:-1] = P_inner
-
-        H = np.zeros(self.N)
-        H[2:-1] = H_inner
-        H[0] = H0 + (self.X[0] ** 2) / 2
-        H[1] = H0 + (self.X[1] ** 2) / 2
-        H[-1] = H0 + (self.X[-1] ** 2) / 2
-
-        Pa, _ = self.calc_asperity(H, calc_deriv=True)
-        P_tot = P_rey + Pa
-
-        D_term = self.D_mat @ P_tot
-        H_elastic = H0 + (self.X ** 2) / 2 + D_term
-
-        H[0] = H_elastic[0]
-        H[1] = H_elastic[1]
-        H[-1] = H_elastic[-1]
-
-        F_rey = self.calc_reynolds_residual(P_rey, H)
-        idx = np.arange(2, self.N - 1)
-        F_film = H[idx] - H_elastic[idx]
-
-        integral = np.sum(P_tot * self.dx)
-        F_load = (self.Wld - integral) / self.Wld if self.Wld != 0 else (self.Wld - integral)
-
-        return np.concatenate([F_rey, F_film, [F_load]])
-
-    # ------------------------
-    # Jacobian (finite-difference for Reynolds part; analytic blocks for film/load)
-    # ------------------------
-    def calc_jacobian(self, V):
-        n_inner = self.N - 3
-        P_inner = V[:n_inner]
-        N_vars = len(V)
-        epsilon = 1e-7
-        J = np.zeros((N_vars, N_vars))
-        idx_inner = np.arange(2, self.N - 1)
-
-        H_inner = V[n_inner:2 * n_inner]
-        H0 = V[-1]
-
-        H = np.zeros(self.N)
-        H[2:-1] = H_inner
-        H[0] = H0 + (self.X[0] ** 2) / 2
-        H[1] = H0 + (self.X[1] ** 2) / 2
-        H[-1] = H0 + (self.X[-1] ** 2) / 2
-
-        _, dPa_dH = self.calc_asperity(H, calc_deriv=True)
-        dPa_dH_slice = dPa_dH[idx_inner]
-        D_slice = self.D_mat[np.ix_(idx_inner, idx_inner)]
-
-        # Film equation block
-        J[n_inner:2 * n_inner, 0:n_inner] = -D_slice
-        Mat_dPa = D_slice * dPa_dH_slice[np.newaxis, :]
-        J[n_inner:2 * n_inner, n_inner:2 * n_inner] = np.eye(n_inner) - Mat_dPa
-        J[n_inner:2 * n_inner, -1] = -1.0
-
-        # Load balance row
-        if self.Wld != 0:
-            J[-1, 0:n_inner] = -self.dx / self.Wld
-            J[-1, n_inner:2 * n_inner] = -dPa_dH_slice * self.dx / self.Wld
-        else:
-            J[-1, 0:n_inner] = -self.dx
-            J[-1, n_inner:2 * n_inner] = -dPa_dH_slice * self.dx
-        J[-1, -1] = 0.0
-
-        # Reynolds FD block
-        P_rey = np.zeros(self.N)
-        P_rey[2:-1] = P_inner
-        F0_rey = self.calc_reynolds_residual(P_rey, H)
-
-        for j in range(n_inner):
-            old = P_rey[j + 2]
-            P_rey[j + 2] += epsilon
-            J[:n_inner, j] = (self.calc_reynolds_residual(P_rey, H) - F0_rey) / epsilon
-            P_rey[j + 2] = old
-
-        for j in range(n_inner):
-            old = H[j + 2]
-            H[j + 2] += epsilon
-            J[:n_inner, n_inner + j] = (self.calc_reynolds_residual(P_rey, H) - F0_rey) / epsilon
-            H[j + 2] = old
-
-        old0, old1, oldm1 = H[0], H[1], H[-1]
-        H[0] = H0 + epsilon + (self.X[0] ** 2) / 2
-        H[1] = H0 + epsilon + (self.X[1] ** 2) / 2
-        H[-1] = H0 + epsilon + (self.X[-1] ** 2) / 2
-        J[:n_inner, -1] = (self.calc_reynolds_residual(P_rey, H) - F0_rey) / epsilon
-        H[0], H[1], H[-1] = old0, old1, oldm1
-
-        return J
-
-    # ------------------------
-    # Newton solver
-    # ------------------------
-    def newton_solve(self, V_guess, tol=1e-6, max_iter=20):
-        V = V_guess.copy()
-        current_res = np.linalg.norm(self.system_func(V))
-
-        for k in range(max_iter):
-            if current_res < tol:
-                return V, True, current_res, k
-            if not np.isfinite(current_res):
-                return V, False, np.inf, k
-
-            try:
-                J = self.calc_jacobian(V)
-                dV = np.linalg.solve(J, -self.system_func(V))
-            except np.linalg.LinAlgError:
-                return V, False, current_res, k
-
-            dV_clip = np.clip(dV, -0.2, 0.2)
-
-            alpha = 1.0
-            found = False
-            for _ in range(4):
-                V_new = V + alpha * dV_clip
-                new_res_val = np.linalg.norm(self.system_func(V_new))
-                if np.isfinite(new_res_val) and new_res_val < current_res:
-                    V = V_new
-                    current_res = new_res_val
-                    found = True
-                    break
-                alpha *= 0.5
-
-            if not found:
-                V = V + 0.05 * dV_clip
-                current_res = np.linalg.norm(self.system_func(V))
-
-        return V, current_res < tol, current_res, max_iter
-
-    # ------------------------
-    # State extraction / initialization
-    # ------------------------
-    def update_history(self, V):
-        n_inner = self.N - 3
-        P_inner = V[:n_inner]
-        H_inner = V[n_inner:2 * n_inner]
-        H0 = V[-1]
-
-        P_rey = np.zeros(self.N)
-        P_rey[2:-1] = P_inner
-
-        H = np.zeros(self.N)
-        H[2:-1] = H_inner
-        H[0] = H0 + (self.X[0] ** 2) / 2
-        H[1] = H0 + (self.X[1] ** 2) / 2
-        H[-1] = H0 + (self.X[-1] ** 2) / 2
-
-        Pa = self.calc_asperity(H)
-        P_tot = P_rey + Pa
-        D_term = self.D_mat @ P_tot
-        H_elastic = H0 + (self.X ** 2) / 2 + D_term
-
-        self.rho_old = self.ro(P_rey)
-        self.H_old = H_elastic
-
-    def get_full_state(self, V):
-        n_inner = self.N - 3
-        P_inner = V[:n_inner]
-        H_inner = V[n_inner:2 * n_inner]
-        H0 = V[-1]
-
-        P_rey = np.zeros(self.N)
-        P_rey[2:-1] = P_inner
-
-        H = np.zeros(self.N)
-        H[2:-1] = H_inner
-        H[0] = H0 + (self.X[0] ** 2) / 2
-        H[1] = H0 + (self.X[1] ** 2) / 2
-        H[-1] = H0 + (self.X[-1] ** 2) / 2
-
-        Pa = self.calc_asperity(H)
-        P_tot = P_rey + Pa
-        D_term = self.D_mat @ P_tot
-        H_elastic = H0 + (self.X ** 2) / 2 + D_term
-        return P_rey, Pa, H_elastic
-
-    def build_initial_guess(self):
-        P_init = np.zeros(self.N)
-        X_dim_m = self.X_dim * self.R
-        contact = np.abs(X_dim_m) <= self.a_Hertz
-        if self.a_Hertz > 0 and np.any(contact) and self.Pmh > 0:
-            P_init[contact] = self.Pmh * np.sqrt(1 - (X_dim_m[contact] / self.a_Hertz) ** 2) / self.P0_ref
-
-        # Hamrock-Dowson-like H0 estimate (as you used)
-        U_dim = self.mu00 * self.Um_mag / (self.E_prime * self.R)
-        G_dim = self.alpha_input * self.E_prime
-        W_dim = (self.W / self.B) / (self.E_prime * self.R)
-        H_min_nd = 2.65 * (U_dim ** 0.7) * (G_dim ** 0.54) * (W_dim ** -0.13) if W_dim > 0 else 1e-6
-        H0_init = H_min_nd
-
-        D_term = self.D_mat @ P_init
-        H_guess = H0_init + (self.X ** 2) / 2 + D_term
-        return np.concatenate([P_init[2:-1], H_guess[2:-1], [H0_init]])
-
-    # ------------------------
-    # NEW: Friction & torque (dimensional) for each cam step
-    # ------------------------
-    def compute_friction_and_torque(self, P_rey_nd, Pa_nd, H_nd, lift_i):
-        """
-        Hydrodynamic wall shear decomposition (standard lubrication):
-          tau_h = tau_couette + tau_poiseuille
-          tau_couette = mu * (Vs / h)   (surface-velocity driven)
-          tau_poiseuille = - (h/2) * dp/dx   (pressure-gradient driven)
-
-        Asperity (boundary) friction:
-          tau_a = mu_b * p_asp
-
-        Forces:
-          Fh = L * ∫ |tau_h| dx
-          Fa = L * ∫  tau_a  dx     (Pa already >=0 in model region)
-          Ft = Fh + Fa
-          Torque = Ft * (rb + lift(theta))
-        """
-        R_eff = max(self.R, 1e-12)
-        dx_m = self.dx * R_eff
-        x_m = self.X_dim * R_eff
-
-        # Dimensional fields
-        p_rey = np.maximum(P_rey_nd, 0.0) * self.P0_ref  # Pa
-        p_asp = np.maximum(Pa_nd, 0.0) * self.P0_ref     # Pa
-        h = np.maximum(H_nd * R_eff, 1e-9)               # m
-
-        # Pressure gradient dp/dx (Pa/m)
-        dpdx = np.gradient(p_rey, dx_m)
-
-        # Local viscosity (Pa*s), using current thermal field
-        mu = self.c_mu(P_rey_nd, self.T_current)
-
-        # Flow factors (optional inclusion consistent with your Reynolds formulation)
-        phi_x, phi_s = self.calc_flow_factors(H_nd)
-
-        # Shear components (Pa)
-        tau_couette = mu * phi_s * (self.Vs / h)
-        tau_poiseuille = -0.5 * h * phi_x * dpdx
-        tau_h = tau_couette + tau_poiseuille
-
-        # Integrate friction forces (N)
-        Fh = self.B * np.trapz(np.abs(tau_h), x_m)
-        Fa = self.B * np.trapz(self.mu_b * p_asp, x_m)
-
-        Ft = Fh + Fa
-
-        # Moment arm (m)
-        moment_arm = self.profile["rb"] + lift_i
-
-        # Torque (N*m)
-        T_fric = Ft * moment_arm
-
-        return Fh, Fa, Ft, T_fric
-
-    # ------------------------
-    # Run one cam cycle for a given RPM
-    # ------------------------
-    def run_cam_cycle(self, rpm, verbose=True):
-        cam = self.compute_cam_kinematics(rpm)
-        self.setup_grid(cam["max_a_over_r"])
-
-        theta_deg = cam["theta_deg"]
-        lift_profile = cam["lift"]
-        um_profile = cam["um"]
-        vs_profile = cam["Vs"]
-        R_profile = cam["R"]
-        F_profile = cam["F"]
-        dt_profile = cam["dt"]
-
-        n_steps = len(theta_deg)
-        total_start = time.perf_counter()
-
-        # Time-history storage
-        P_nd_list = []
-        Pa_nd_list = []
-        H_list = []
-        load_err_list = []
-
-        # NEW: friction / torque histories
-        Fh_list = []
-        Fa_list = []
-        Ft_list = []
-        Tq_list = []
-
-        V_current = None
-
-        for i in range(n_steps):
-            t0 = time.perf_counter()
-
-            self.update_operating_state(um_profile[i], vs_profile[i], R_profile[i], F_profile[i])
-            self.dt = dt_profile[i]
-
-            if V_current is None:
-                V_current = self.build_initial_guess()
-
-            self.update_history(V_current)
-
-            # Thermal coupling loop (kept)
-            for _ in range(2):
-                V_new, success, res, iters = self.newton_solve(V_current, tol=1e-7, max_iter=30)
-                P_rey, Pa, H_el = self.get_full_state(V_new)
-                T_new = self.calc_temperature_rise(P_rey, H_el, Pa)
-                change = np.max(np.abs(T_new - self.T_current))
-                self.T_current = 0.5 * T_new + 0.5 * self.T_current
-                V_current = V_new
-                if success and change < 0.2:
-                    break
-
-            # Retry fallback (kept)
-            if res > 1e-6 or not success:
-                if verbose:
-                    print(f"[RPM {rpm}] Step {i+1} retry: resetting to Hertzian guess.")
-                V_current = self.build_initial_guess()
-                self.update_history(V_current)
-                V_new, success, res, iters = self.newton_solve(V_current, tol=1e-6, max_iter=35)
-                V_current = V_new
-
-            P_rey, Pa, H = self.get_full_state(V_current)
-
-            # Load check (dimensional)
-            integral_load = np.sum((P_rey + Pa) * self.P0_ref * (self.dx * self.R) * self.B)
-            W_eff = max(self.W, 1e-12)
-            ld_err = abs(self.W - integral_load) / W_eff
-
-            # Store state histories
-            P_nd_list.append(P_rey)
-            Pa_nd_list.append(Pa)
-            H_list.append(H)
-            load_err_list.append(ld_err)
-
-            # ------------------------------------------------------------------
-            # Frictions & Torque (NEW SECTION BEFORE PLOTTING)
-            # ------------------------------------------------------------------
-            Fh, Fa, Ft, Tq = self.compute_friction_and_torque(P_rey, Pa, H, lift_profile[i])
-            Fh_list.append(Fh)
-            Fa_list.append(Fa)
-            Ft_list.append(Ft)
-            Tq_list.append(Tq)
-
-            if verbose:
-                dt_step = time.perf_counter() - t0
-                print(f"[RPM {rpm}] Step {i+1}/{n_steps} | Err={ld_err:.2e} | Res={res:.2e} | dt={dt_step:.3f}s")
-
-        elapsed = time.perf_counter() - total_start
-        if verbose:
-            print(f"[RPM {rpm}] Total Time: {elapsed:.2f}s")
-
-        # Convert to arrays
-        P_rey_nd_arr = np.array(P_nd_list)
-        Pa_nd_arr = np.array(Pa_nd_list)
-        H_arr = np.array(H_list)
-
-        Fh_arr = np.array(Fh_list)
-        Fa_arr = np.array(Fa_list)
-        Ft_arr = np.array(Ft_list)
-        Tq_arr = np.array(Tq_list)
-
-        # Average torque over cycle (time-weighted)
-        avg_torque = np.sum(Tq_arr * dt_profile) / np.sum(dt_profile)
-
-        return {
-            "rpm": rpm,
-            "theta_deg": theta_deg,
-            "X_dim": self.X_dim.copy(),
-            "P_rey_nd": P_rey_nd_arr,
-            "Pa_nd": Pa_nd_arr,
-            "H_nd": H_arr,
-            "Fh": Fh_arr,
-            "Fa": Fa_arr,
-            "Ft": Ft_arr,
-            "Tq": Tq_arr,
-            "avg_torque": avg_torque,
-            "cam": cam,
-            "load_err": np.array(load_err_list),
-        }
-
-
-# ======================================================================================
-# 2) PLOT CONTROL & UTILITIES
-# ======================================================================================
-
-# ------------------------
-# Manual RPM control
-# Edit this list to run single or multiple RPMs
-# ------------------------
-RPM_LIST = [300]
-
-# ------------------------
-# Manual plot toggles
-# ------------------------
-PLOT_CAM_KINEMATICS = True
-PLOT_REYNOLDS_PRESSURE_CYCLE = True
-PLOT_ASPERITY_PRESSURE_CYCLE = True
-PLOT_FILM_THICKNESS_CYCLE = True
-PLOT_HYDRO_FRICTION_VS_ANGLE = True
-PLOT_ASP_FRICTION_VS_ANGLE = True
-PLOT_TORQUE_VS_ANGLE = True
-
-
-def plot_cam_kinematics(result, out_prefix="Graph_Cam_Kinematics"):
-    cam = result["cam"]
-    theta_deg = cam["theta_deg"]
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    axes[0, 0].plot(theta_deg, cam["um"])
-    axes[0, 0].set_ylabel("um (m/s)")
-
-    axes[0, 1].plot(theta_deg, cam["Vs"])
-    axes[0, 1].set_ylabel("Vs (m/s)")
-
-    axes[1, 0].plot(theta_deg, cam["R"])
-    axes[1, 0].set_ylabel("R (m)")
-
-    axes[1, 1].plot(theta_deg, cam["F"])
-    axes[1, 1].set_ylabel("F (N)")
-
-    for ax in axes.flat:
-        ax.set_xlabel("Cam angle (deg)")
-        ax.grid(True)
-
-    fig.suptitle(f"Cam Kinematics (RPM = {result['rpm']})")
-    fig.tight_layout()
-    fig.savefig(f"{out_prefix}_RPM{result['rpm']}.png", dpi=200)
-    plt.close(fig)
-
-
-def plot_cycle_field(result, field_arr, title, ylabel, out_name):
-    theta_deg = result["theta_deg"]
-    X_plot = result["X_dim"]
-    n_steps = len(theta_deg)
-
-    colors = plt.cm.viridis(np.linspace(0, 1, n_steps))
-    plt.figure(figsize=(10, 6))
-    for i in range(n_steps):
-        plt.plot(X_plot, field_arr[i], color=colors[i], alpha=0.4, linewidth=0.7)
-
-    plt.xlabel("X/R (non-dimensional)")
-    plt.ylabel(ylabel)
-    plt.title(f"{title} (RPM = {result['rpm']})")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"{out_name}_RPM{result['rpm']}.png", dpi=200)
-    plt.close()
-
-
-def plot_vs_angle(results, key, ylabel, title, out_name):
-    plt.figure(figsize=(10, 6))
-    for r in results:
-        plt.plot(r["theta_deg"], r[key], label=f"{r['rpm']} RPM")
-    plt.xlabel("Cam angle (deg)")
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_name, dpi=200)
-    plt.close()
-
-
-def main():
-    solver = EHLSolver(lift_file="updated_lift.txt")
-    all_results = []
-
-    for rpm in RPM_LIST:
-        res = solver.run_cam_cycle(rpm, verbose=True)
-        all_results.append(res)
-
-        # Per-RPM plots
-        if PLOT_CAM_KINEMATICS:
-            plot_cam_kinematics(res)
-
-        if PLOT_REYNOLDS_PRESSURE_CYCLE:
-            plot_cycle_field(
-                res,
-                res["P_rey_nd"],
-                title="Non-dimensional Reynolds Pressure (Cam Cycle)",
-                ylabel="P_rey (p / P0_ref)",
-                out_name="Graph_Reynolds_Pressure_Cycle"
-            )
-
-        if PLOT_ASPERITY_PRESSURE_CYCLE:
-            plot_cycle_field(
-                res,
-                res["Pa_nd"],
-                title="Non-dimensional Asperity Pressure (Cam Cycle)",
-                ylabel="P_asp (p_asp / P0_ref)",
-                out_name="Graph_Asperity_Pressure_Cycle"
-            )
-
-        if PLOT_FILM_THICKNESS_CYCLE:
-            plot_cycle_field(
-                res,
-                res["H_nd"],
-                title="Non-dimensional Film Thickness (Cam Cycle)",
-                ylabel="H (h / R)",
-                out_name="Graph_Film_Thickness_Cycle"
-            )
-
-    # Cross-RPM overlay plots vs cam angle
-    if PLOT_HYDRO_FRICTION_VS_ANGLE:
-        plot_vs_angle(
-            all_results,
-            key="Fh",
-            ylabel="Hydrodynamic friction force Fh (N)",
-            title="Hydrodynamic Friction vs Cam Angle",
-            out_name="Graph_Hydrodynamic_Friction_vs_CamAngle.png"
-        )
-
-    if PLOT_ASP_FRICTION_VS_ANGLE:
-        plot_vs_angle(
-            all_results,
-            key="Fa",
-            ylabel="Asperity friction force Fa (N)",
-            title="Asperity Friction vs Cam Angle",
-            out_name="Graph_Asperity_Friction_vs_CamAngle.png"
-        )
-
-    if PLOT_TORQUE_VS_ANGLE:
-        plot_vs_angle(
-            all_results,
-            key="Tq",
-            ylabel="Friction torque (N·m)",
-            title="Friction Torque vs Cam Angle",
-            out_name="Graph_Friction_Torque_vs_CamAngle.png"
-        )
-
-    # Print average torque per RPM
-    print("\n===== Average Friction Torque Over Entire Cam Cycle =====")
-    for r in all_results:
-        print(f"RPM {r['rpm']}: Avg friction torque = {r['avg_torque']:.6e} N·m")
-
-    print("\nPlots generated (according to toggles).")
-
-
-if __name__ == "__main__":
-    main()
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter, fftconvolve
+from pathlib import Path
+from math import ceil
+import pandas as pd
+
+# =======================
+# USER: default test temperature (°C)
+# =======================
+DEFAULT_TEMP_C = 90  # valid options: 90, 110
+TEMP_C = DEFAULT_TEMP_C
+
+HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+DATA_DIR = "/content/cam"
+CAM_FILE = "updated_lift.txt"
+
+def _load_cam(data_dir, fname):
+    path = os.path.join(data_dir, fname)
+    _cam = pd.read_csv(
+        path, sep=r"\s+", engine="python", comment="#", header=None,
+        names=["angle_deg", "lift_m"], usecols=[0, 1]
+    )
+    _cam["angle_deg"] = pd.to_numeric(_cam["angle_deg"], errors="raise")
+    _cam["lift_m"]    = pd.to_numeric(_cam["lift_m"],    errors="raise")
+    return _cam.sort_values("angle_deg").reset_index(drop=True)
+
+CAM = _load_cam(DATA_DIR, CAM_FILE)
+th_deg = CAM["angle_deg"].to_numpy(dtype=float)
+th     = np.deg2rad(th_deg)
+lift   = CAM["lift_m"].to_numpy(dtype=float)
+TH_DEG = th_deg.copy()
+lift_s = lift.copy()
+dlift_s  = np.gradient(lift, th)           # dL/dθ
+d2lift_s = np.gradient(dlift_s, th)
+
+# ============================================================
+# Materials / geometry / fluid (Fixed)
+# ============================================================
+rb       = 18.5e-3      # base circle radius [m]
+k_spring = 7130.0       # spring rate [N/m]
+delta    = 1.77e-3      # preload [m]
+Meq      = 0.05733      # equivalent mass [kg]
+L        = 7.2e-3       # out-of-plane length [m]
+E_star   = 217e9        # [Pa]
+
+# ============================================================
+# Tables
+# ============================================================
+ETA0_TABLE     = {90: 0.01381, 110: 0.008155}    # Pa·s
+ALPHA0_TABLE   = {90: 16e-9,   110: 13e-9}       # Pa^-1
+RHO0_TABLE     = {90: 858.44,  110: 840.0}       # kg/m^3
+MU_B_TABLE     = {90: 0.12,    110: 0.12}
+GAMMA_LIM_TABLE= {90: 0.07,    110: 0.06}        # 1/Pa
+LAM_C_TABLE    = {90: 3.0e-6,  110: 2.0e-6}
+N_C_TABLE      = {90: 0.65,    110: 0.52}
+PHI_IN_TABLE   = {90: 0.60,    110: 0.7}
+ETA_INF_TABLE  = {90: 0.006,   110: 0.004}
+
+BETA0_CONST    = 0.68
+P0_HOUPERT     = 1.98e8
+C_ROELANDS     = 5.1e-9
+T_SHIFT        = 138.0
+
+K_THERM_TABLE  = {90: 0.11, 110: 0.14}
+GAMMA_TH_TABLE = {90: 4.5e-4, 110: 6.5e-4}
+
+if TEMP_C not in (90, 110):
+    raise ValueError("TEMP_C must be one of {90, 110}.")
+
+eta0      = ETA0_TABLE[TEMP_C]
+alpha0    = ALPHA0_TABLE[TEMP_C]
+rho0      = RHO0_TABLE[TEMP_C]
+mu_b      = MU_B_TABLE[TEMP_C]
+gamma_lim = GAMMA_LIM_TABLE[TEMP_C]
+lam_c     = LAM_C_TABLE[TEMP_C]
+n_c       = N_C_TABLE[TEMP_C]
+PHI_IN    = PHI_IN_TABLE[TEMP_C]
+eta_inf   = ETA_INF_TABLE[TEMP_C]
+k_lub     = K_THERM_TABLE[TEMP_C]
+gamma_th  = GAMMA_TH_TABLE[TEMP_C]
+
+# ============================================================
+# Greenwood-Tripp (User Specified)
+# ============================================================
+sigma_combined = 0.2e-6
+beta_a         = sigma_combined/0.001
+eta_R          = (0.055/(sigma_combined*beta_a))
+
+# ... (skip to solve_theta loop) ...
+
+# Inside solve_theta loop (around line 399 in original view, likely different now)
+# I need to target the global const at top, AND the call site.
+# replace_file_content targets contiguous block.
+# I will use multi_replace.
+
+
+def _F52_greenwood_tripp(lam):
+    lam = np.asarray(lam, dtype=float)
+    H   = np.maximum(lam, 0.0)
+    H1, H2, H3 = 9.0, 8.0, 4.0
+    f1 = 0.11755e-39
+    f2 = 0.67331e2
+    f3 = -0.11699e2
+    f4 = 0.15827e-20
+    f5 = 0.29156e2
+    f6 = -0.29786e1
+    f7 = 0.11201e-3
+    f8 = 0.19447e1
+    F = np.zeros_like(H)
+
+    m1 = (H < 2.0)
+    if np.any(m1):
+        t1 = np.maximum(H1 - H[m1], 1e-12)
+        ln1 = np.log(t1)
+        F[m1] = f1 * np.exp(f2 * ln1 + f3 * ln1**2)
+
+    m2 = (H >= 2.0) & (H < 3.5)
+    if np.any(m2):
+        t2 = np.maximum(H2 - H[m2], 1e-12)
+        ln2 = np.log(t2)
+        F[m2] = f4 * np.exp(f5 * ln2 + f6 * ln2**2)
+
+    m3 = (H >= 3.5) & (H < 4.0)
+    if np.any(m3):
+        t3 = np.maximum(H3 - H[m3], 0.0)
+        F[m3] = f7 * t3**f8
+
+    return np.maximum(F, 0.0)
+
+def asperity_pressure_zhao_masjedi(h, x, W_total, Ve, R, sigma=sigma_combined, hardness_GPa=None):
+    h = np.asarray(h, dtype=float)
+    if h.size < 2:
+        return np.zeros_like(h)
+    sigma_loc = float(max(sigma, 1e-12))
+    lam = np.maximum(h / sigma_loc, 0.0)
+    f52 = _F52_greenwood_tripp(lam)
+    zeta = eta_R
+    pre = (16.0 * np.sqrt(2.0) / 15.0) * np.pi * (zeta * beta_a * sigma_loc) ** 2 * np.sqrt(sigma_loc / beta_a) * E_star
+    p_asp_el = pre * f52
+    p_asp_el = np.maximum(p_asp_el, 0.0)
+    if hardness_GPa is not None and hardness_GPa > 0.0:
+        H_mat = hardness_GPa * 1e9
+        ratio = p_asp_el / H_mat
+        p_asp_x = p_asp_el / np.sqrt(1.0 + ratio**2)
+    else:
+        p_asp_x = p_asp_el
+    return np.maximum(p_asp_x, 0.0)
+
+# ============================================================
+# Rheology
+# ============================================================
+def _houpert_params(eta0, T0, alpha0, beta0=BETA0_CONST):
+    lneta0_plus = np.log(max(eta0, 1e-16)) + 9.67
+    Z  = alpha0 / (C_ROELANDS * lneta0_plus + 1e-30)
+    # Roelands standard form: ((T + 138)/(T0 + 138))^-S0
+    # Current code passed T_SHIFT=138.
+    S0_calc = beta0 * (T0 + T_SHIFT) / (lneta0_plus + 1e-30)
+    S0 = min(S0_calc, 1.5) # Suitability Tune: Cap Sensitivity
+    return Z, S0, lneta0_plus
+
+def _alpha_star(p, T, eta0, T0, Z, S0, lneta0_plus):
+    p_eff = np.maximum(p, 0.0)
+    # Fix: Use (T + 138) instead of (T - 138) to avoid singularity.
+    temp_ratio = (T + T_SHIFT) / (T0 + T_SHIFT + 1e-30)
+    temp_ratio = np.maximum(temp_ratio, 1e-12)
+    temp_factor = temp_ratio**(-S0)
+    press = 1.0 + p_eff / P0_HOUPERT
+    press_minus1 = press**Z - 1.0
+    den = np.where(p_eff > 0.0, p_eff, 1.0)
+    alpha = lneta0_plus * temp_factor * press_minus1 / den
+    alpha = np.where(p_eff > 0.0, alpha, lneta0_plus * temp_factor * (Z / P0_HOUPERT))
+    return alpha
+
+def deltaT_karthikeyan(u_av, h, p, a, eta_abs, k_l, gamma_c, T_c):
+    # In mixed regime (h < sigma), thermal transport is not limited by fluid film h.
+    # We floor h to sigma_combined to avoid singularity dt ~ 1/h.
+    h_eff = np.maximum(h, sigma_combined) 
+    a_eff = np.maximum(a, 1e-12)
+    u_abs = np.abs(u_av)
+    p_eff = np.maximum(p, 0.0)
+    eta_bar = np.maximum(eta_abs, 1e-7) / max(eta0, 1e-16)
+    num = (u_abs * T_c * gamma_c * h_eff * p_eff + 2.0 * a_eff * (eta_bar**2) / h_eff)
+    den = a_eff * k_l / h_eff - u_abs * gamma_c * h_eff * p_eff
+    den = np.where(np.abs(den) < 1e-9, np.sign(den) * 1e-9, den)
+    dT = num / den
+    # SAFETY: Clamp dT to avoid runaway thermal collapse (physics break)
+    # Roelands pole fixed (using T+138). Relax clamp.
+    dT = np.clip(dT, -50.0, 150.0) 
+    return dT
+
+def eta_houpert(p, T0_c, Ve, h, a):
+    Z, S0, lneta0_plus = _houpert_params(eta0, T0_c, alpha0, BETA0_CONST)
+    p_arr = np.maximum(np.asarray(p, dtype=float), 0.0)
+    
+    # 1st pass
+    alpha_s = _alpha_star(p_arr, T0_c, eta0, T0_c, Z, S0, lneta0_plus)
+    # Clamp exponent to prevent overflow (e.g., exp(100) is huge)
+    arg_init = np.clip(alpha_s * p_arr, -50.0, 50.0)
+    eta_init = eta0 * np.exp(arg_init)
+    eta_init = np.maximum(eta_init, 1e-7)
+    
+    dT = deltaT_karthikeyan(Ve, h, p_arr, a, eta_init, k_lub, gamma_th, T0_c)
+    # Limit effective thermal thinning (Suitability Tune)
+    dT_eff = np.minimum(dT, 40.0) 
+    T_upd = T0_c + dT_eff
+    
+    # 2nd pass
+    alpha_s2 = _alpha_star(p_arr, T_upd, eta0, T0_c, Z, S0, lneta0_plus)
+    eta_new = eta0 * np.exp(np.clip(alpha_s2 * p_arr, -50.0, 50.0))
+        
+    return np.minimum(np.maximum(eta_new, 1e-7), 1e9), dT
+
+def rho_dowson_higginson(p, dT):
+    p_eff = np.maximum(p, 0.0)
+    # Corrected Dowson-Higginson: rho = rho0 * (0.59e9 + 1.34*p) / (0.59e9 + p)
+    # Using constants D1 = 0.59e9, D2 = 1.34
+    D1 = 0.59e9
+    D2 = 1.34
+    frac = (D1 + D2 * p_eff) / (D1 + p_eff)
+    therm = (1.0 - gamma_th * dT)
+    return np.maximum(rho0 * frac * therm, rho0*0.5) # Allow thermal reduction but bounded
+
+def eta_carreau(etaN, h, gdot):
+    # DIAGNOSTIC: Disable Shear Thinning (Force Newtonian)
+    # return np.maximum(etaN, 1e-7)
+    h_eff = np.maximum(h, 1e-12)
+    gdot_eff = np.maximum(gdot, 1e-6)
+    return np.maximum(eta_inf + (etaN-eta_inf)*(1.0 + (lam_c*gdot_eff)**2.0)**((n_c-1.0)/2.0), 1e-7)
+
+# ============================================================
+# Texture & Flow Factors
+# ============================================================
+w_texture = 35e-6
+g_val     = 1e-9
+x_start   = 0.0
+X_in, X_out = -4.0, 4.0 # Symmetric domain for reciprocating flow (Ve > 0 and Ve < 0)
+D_TEXTURE = {"5%": 366e-6, "8%": 228e-6, "10%": 183e-6}
+A_TEXTURE_CONST = 4e-6
+TEXTURE_ZONE_MASK = np.ones_like(TH_DEG, dtype=bool)
+
+def integrate_shift(Vf, Ve, w):
+    dt = np.gradient(th) / (w + 1e-30)
+    Vrel = Vf - Ve
+    shift = np.zeros_like(Vf)
+    if Vf.size > 1:
+        shift[1:] = np.cumsum(0.5 * (Vrel[1:] + Vrel[:-1]) * dt[1:])
+    return shift
+
+def htex_profile(x, a_theta, atex_theta, shift_theta, d_texture, rpm=None, temp_c=TEMP_C):
+    if atex_theta <= 0.0 or a_theta <= 0.0:
+        return np.zeros_like(x)
+    tex_key = None
+    for k, v in D_TEXTURE.items():
+        if np.isclose(v, d_texture, rtol=0.0, atol=1e-9):
+            tex_key = k
+            break
+    if tex_key is None:
+        return np.zeros_like(x)
+
+    u = ((x - x_start - shift_theta + d_texture / 2.0) % d_texture) - d_texture / 2.0
+    expo = np.log(g_val / atex_theta) * (u**2) / (w_texture**2 + 1e-30)
+    h = atex_theta * np.exp(expo)
+    return np.where((x >= -a_theta) & (x <= a_theta), h, 0.0)
+
+def phi_x_func(h, sigma=sigma_combined, gamma=1.0):
+    """
+    Patir-Cheng (1978) Pressure Flow Factor.
+    gamma = Peklenik number (correlation length ratio λx/λy)
+    gamma > 1: Longitudinal roughness (grooves parallel to flow)
+    gamma < 1: Transverse roughness (grooves perpendicular to flow)
+    gamma = 1: Isotropic roughness
+    """
+    if sigma is None or sigma <= 0.0:
+        return np.ones_like(h)
+    H = np.maximum(h / float(sigma), 0.01)  # Allow very low H
+    
+    # Standard Patir-Cheng 1978 (Longitudinal/Isotropic Base)
+    # Using the Isotropic-style decay for general robustness
+    C = 0.90
+    r = 0.56
+    phi_x = 1.0 - C * np.exp(-r * H)
+    
+    if gamma < 1.0:
+        # Transverse: Acts as dam. Use new logic? 
+        # Actually, let's strictly apply the Percolation Logic below 
+        # which overrides the high-H behavior for thin films.
+        pass
+
+    # PERCOLATION THRESHOLD OPTIMIZATION
+    # When h < 0.5 sigma, asperity contact blocks flow channels significantly.
+    # Standard PC formula is statistical and might not capture the sharp cutoff
+    # needed to seal the high-pressure contact in this solver.
+    # We apply a "Percolation Factor" to restrict flow below H=0.5.
+    
+    threshold = 0.5
+    mask_percolation = H < threshold
+    if np.any(mask_percolation):
+        # Linear decay from value at threshold down to 0
+        # phi_x_at_thresh = 1.0 - C*exp(-r*0.5) ~ 0.32
+        # We scale phi_x by (H / threshold)^2 to force rapid shutoff
+        # UPDATED: Use power 4.0 for balanced sealing vs stability
+        scale = (H[mask_percolation] / threshold) ** 4.0
+        phi_x[mask_percolation] *= scale
+    
+    # Allow decay to nearly 0 (1e-5 to avoid matrix underflow)
+    return np.maximum(phi_x, 1e-5)
+
+def phi_s_func(h, sigma=sigma_combined, gamma=1.0):
+    """
+    Patir-Cheng (1978) Shear Flow Factor.
+    Represents additional flow due to roughness sliding.
+    """
+    if sigma is None or sigma <= 0.0:
+        return np.zeros_like(h)
+    H = np.maximum(h / float(sigma), 0.5)
+    
+    # Standard formula: phi_s = A1 * H^A2 * exp(-A3/H + A4)
+    # Coefficients from Patir-Cheng for Gaussian surfaces
+    if gamma >= 1.0:
+        # Longitudinal roughness
+        A1 = 1.899
+        A2 = 0.98  # H^A2 term
+        A3 = 0.92
+        A4 = 0.05 * np.log(gamma)
+    else:
+        # Transverse roughness
+        A1 = 1.126
+        A2 = 0.25
+        A3 = 0.62
+        A4 = 0.0
+    
+    phi_s = A1 * (H ** A2) * np.exp(-A3 / H + A4)
+    return np.clip(phi_s, -2.0, 2.0)  # Limit for stability
+
+# ============================================================
+# Kinematics & Hertz
+# ============================================================
+def kin_arrays(rpm):
+    R = np.maximum(rb + lift + d2lift_s, 1e-7)
+    w = 2.0*np.pi*float(rpm)/60.0
+    Vf = d2lift_s  * w
+    Vc = (rb + lift + d2lift_s ) * w
+    Ve = 0.5 * (Vc + Vf)
+    Vs = Vc - Vf
+    W = k_spring * (lift + delta) + (Meq * (w**2) * d2lift_s)
+    return R, Ve, Vs, W, w
+
+def get_interpolated_kinematics(angle_deg, rpm):
+    """
+    Interpolate kinematics (R, Ve, Vs, W) at arbitrary angle.
+    Essential for sub-stepping where angle doesn't align with grid.
+    """
+    # Get full arrays
+    R_arr, Ve_arr, Vs_arr, W_arr, w = kin_arrays(rpm)
+    
+    # Interpolate
+    # TH_DEG is global array of angles
+    # Handle wrapping? Cam is cyclic 0-360 usually, but here defined -18 to +18?
+    # Provided data is likely a sweep.
+    # np.interp uses constant extrapolation by default
+    
+    R = np.interp(angle_deg, TH_DEG, R_arr)
+    Ve = np.interp(angle_deg, TH_DEG, Ve_arr)
+    Vs = np.interp(angle_deg, TH_DEG, Vs_arr)
+    W = np.interp(angle_deg, TH_DEG, W_arr)
+    
+    return R, Ve, Vs, W, w
+
+def a_hertz(W,R):
+    return np.sqrt( np.maximum(8.0*np.maximum(W,1e-9)*np.maximum(R,1e-12),0.0)/(np.pi*E_star*L + 1e-30) )
+
+def ph_hertz(W,a):
+    return 2.0*np.maximum(W,0.0)/(np.pi*np.maximum(a,1e-12)*L + 1e-30)
+
+def central_film_thickness(R, W, Ve):
+    R = float(np.clip(R, 1e-7, None))
+    W = float(np.clip(W, 1e-6, None))
+    U = (eta0 * np.abs(Ve))/(E_star * R + 1e-30)
+    G = alpha0 * E_star
+    W_star = W / (E_star * L * R + 1e-30)
+    hc = 3.06 * (U**0.69) * (G**0.56) * (W_star**-0.1) * R
+    return hc
+
+def elastic_deflection(x, p):
+    """
+    Elastic deflection for 2D line contact using analytical BEM kernel.
+    For line contact: u(x) = -2/(π E*) ∫ p(s) ln|x-s| ds
+    
+    Using Johnson's formula for constant pressure element of width 2b:
+    Kernel contribution: K(x) = x*ln|x| - x  (integrated)
+    """
+    x = np.asarray(x, float)
+    p = np.asarray(p, float)
+    N = len(x)
+    dx = x[1] - x[0]
+    
+    # Half-width of each element
+    b = dx / 2.0
+    
+    # Create kernel for full convolution range
+    grid = (np.arange(-N + 1, N, dtype=float)) * dx
+    
+    xp = grid + b
+    xm = grid - b
+    
+    def xlx(v):
+        """Compute x*ln|x| with proper handling of x=0."""
+        res = np.zeros_like(v)
+        mask = np.abs(v) > 1e-12
+        res[mask] = v[mask] * np.log(np.abs(v[mask]))
+        return res
+    
+    # Analytical kernel for constant pressure element
+    # K(x) = (x+b)*ln|x+b| - (x-b)*ln|x-b| - 2b
+    kernel = xlx(xp) - xlx(xm) - 2*b
+    
+    # Convolve pressure with kernel
+    full_conv = np.convolve(p, kernel, mode='full')
+    conv = full_conv[N-1 : 2*N-1]
+    
+    # Elastic deflection for line contact (plane strain)
+    # u = -2/(π E*) * integral
+    # Note: E* = E / (1 - ν²) for plane strain
+    u = -conv * (2.0 / (np.pi * E_star))
+    
+    # Remove rigid body translation (set mean to zero)
+    u -= np.mean(u)
+    
+    return u
+
+def _dt_for_rpm(rpm):
+    _, _, _, _, w = kin_arrays(rpm)
+    dtheta = float(np.mean(np.diff(th)))
+    return dtheta / (w + 1e-30)
+
+def _nearest_angle_index(angle_deg):
+    return int(np.argmin(np.abs(TH_DEG - float(angle_deg))))
+
+# ============================================================
+# SOLVER CORE (JFO Active Set + FV)
+# ============================================================
+def thomas_solve(A, B, C, RHS):
+    """Tridiagonal solver."""
+    n = len(B)
+    c_prime = np.zeros(n)
+    d_prime = np.zeros(n)
+    
+    # Safely handle division
+    denom = B[0]
+    if abs(denom) < 1e-20: denom = 1e-20 * np.sign(denom) if denom != 0 else 1e-20
+    
+    c_prime[0] = C[0] / denom
+    d_prime[0] = RHS[0] / denom
+    
+    for i in range(1, n-1):
+        temp = B[i] - A[i] * c_prime[i-1]
+        if abs(temp) < 1e-20: temp = 1e-20 * np.sign(temp) if temp != 0 else 1e-20
+        c_prime[i] = C[i] / temp
+        d_prime[i] = (RHS[i] - A[i] * d_prime[i-1]) / temp
+        
+    temp = B[n-1] - A[n-1] * c_prime[n-2]
+    if abs(temp) < 1e-20: temp = 1e-20 * np.sign(temp) if temp != 0 else 1e-20
+    d_prime[n-1] = (RHS[n-1] - A[n-1] * d_prime[n-2]) / temp
+    
+    x = np.zeros(n)
+    x[n-1] = d_prime[n-1]
+    for i in range(n-2, -1, -1):
+        x[i] = d_prime[i] - c_prime[i] * x[i+1]
+    return x
+
+def solve_theta(
+    R, Ve, Vs, W, dt, angle_deg, rpm,
+    atex_theta, shift_theta, d_texture,
+    Nx=512, iters=30, substep_cap=6, relax_p=0.5, relax_h=0.5,
+    M_core=301, observe=True, load_iters=60, load_tol=1e-2,
+    h0_seed=None,
+    # Transient History (Optional)
+    h_prev=None, rho_prev=None, theta_prev=None
+):
+    # Setup Geometry
+    R = float(max(R, 1e-12))
+    W_ext = float(W)
+    W_target = float(max(W_ext, 0.0))
+    W_eff = float(max(W_target, 1.0e-6))
+    
+    a  = max(a_hertz(W_eff, R), 1e-6)
+    ph = max(ph_hertz(W_eff, a), 1e3)
+    
+    xL, xR = X_in * a, X_out * a
+    x  = np.linspace(xL, xR, Nx)
+    dx = x[1] - x[0]
+    parabola = x * x / (2.0 * R)
+    htex = htex_profile(x, a, atex_theta, shift_theta, d_texture, rpm, TEMP_C)
+    
+    if h0_seed is not None and h0_seed > 0:
+        h0_curr = float(h0_seed)
+    else:
+        h0_curr = 5.0e-8
+        
+    p = np.zeros(Nx)
+    theta = np.ones(Nx)
+    X_hz = x/(a+1e-30)
+    mask0 = np.abs(X_hz) <= 1.0
+    p[mask0] = ph * np.sqrt(np.maximum(1.0 - X_hz[mask0]**2, 0.0))
+    p[~mask0] = 1.0e5 
+    
+    p_asp = np.zeros(Nx)
+    h0_loop = h0_curr
+    
+    # Active Set State Map (Fluid vs Cavity)
+    is_fluid = np.ones(Nx, dtype=bool)
+    
+    # Load History for Secant
+    load_hist = [] 
+    gain_load = 0.005 # Ultra-conservative for stability 
+    
+    for i_load in range(load_iters):
+        # Initialize Set if first load step
+        if i_load == 0:
+             is_fluid[:] = True
+             # Boundary conditions based on flow direction
+             if Ve >= 0:
+                 # Flow from left to right: outlet at right
+                 is_fluid[0] = True  # Inlet BC
+                 is_fluid[-1] = False  # Outlet BC (cavity allowed)
+             else:
+                 # Flow from right to left: outlet at left
+                 is_fluid[0] = False  # Outlet BC (cavity allowed)
+                 is_fluid[-1] = True  # Inlet BC 
+             
+        for i_murty in range(iters):
+             # UPDATE COUPLING INSIDE LOOP
+             p_tot = p + p_asp
+             defl = elastic_deflection(x, p_tot)
+             # Relaxation for stability
+             # h_new = h0_loop + parabola + defl + htex
+             # But we just use current p to get current h
+             h = np.maximum(h0_loop + parabola + defl + htex, 1e-12)  # Physical floor
+             p_asp = asperity_pressure_zhao_masjedi(h, x, W_eff, Ve, R, sigma=sigma_combined)
+        
+             if observe and (i_load % 10 == 0) and (i_murty == 0):
+                 print(f"DEBUG Loop {i_load} Newton {i_murty}: pmax={np.max(p):.2e} th_min={np.min(theta):.2f}")
+
+             # Enforce Complementarity
+             p[~is_fluid] = 0.0
+             theta[is_fluid] = 1.0
+             
+             eta_f, dT_f = eta_houpert(p, TEMP_C, Ve, h, a)
+             rho_f = rho_dowson_higginson(p, dT_f)
+             phix = phi_x_func(h, sigma=sigma_combined)  # Use user-specified sigma
+             
+             gdot = np.abs(Vs) / np.maximum(h, 1e-9)
+             eta_eff = eta_carreau(eta_f, h, gdot)
+             
+             # 2. Vectorized Matrix Assembly
+             D_node = (rho_f * h**3 * phix) / (12.0 * eta_eff)
+             D_node = (rho_f * h**3 * phix) / (12.0 * eta_eff)
+             # Harmonic Mean for Diffusion (Essential for EHL high-viscosity contrast)
+             # D_harmonic = 2.0 * D_L * D_R / (D_L + D_R + 1e-60) -- Too restrictive for Inlet
+             D_face = 0.5 * (D_node[:-1] + D_node[1:]) # Arithmetic Mean (Standard for FV)
+             
+             # Construct Face Arrays (size Nx+1) 
+             
+             # Construct Face Arrays (size Nx+1) 
+             
+             # Construct Face Arrays (size Nx+1)
+             # Faces 0..Nx
+             
+             # Coeffs C = D_face / dx
+             C_all = np.empty(Nx+1)
+             C_all[0] = D_node[0]/dx # BC approx
+             C_all[-1] = D_node[-1]/dx
+             C_all[1:-1] = D_face/dx
+             
+             # States Left/Right of Face f
+             # Left state
+             p_L_trace = np.empty(Nx+1)
+             theta_L_trace = np.empty(Nx+1)
+             is_fluid_L = np.empty(Nx+1, dtype=bool)
+             
+             # Right state
+             p_R_trace = np.empty(Nx+1)
+             theta_R_trace = np.empty(Nx+1)
+             is_fluid_R = np.empty(Nx+1, dtype=bool)
+             
+             # Ambient pressure for inlet
+             p_amb = 1e5  # 1 bar
+             
+             if Ve >= 0:
+                 # Inlet at left (face 0), outlet at right (face Nx)
+                 p_L_trace[0] = p_amb  # Inlet: fluid at ambient
+                 theta_L_trace[0] = 1.0
+                 is_fluid_L[0] = True
+                 
+                 p_R_trace[-1] = 0.0  # Outlet: can cavitate
+                 theta_R_trace[-1] = 1.0
+                 is_fluid_R[-1] = False
+             else:
+                 # Inlet at right (face Nx), outlet at left (face 0)
+                 p_L_trace[0] = 0.0  # Outlet: can cavitate
+                 theta_L_trace[0] = 1.0
+                 is_fluid_L[0] = False
+                 
+                 p_R_trace[-1] = p_amb  # Inlet: fluid at ambient
+                 theta_R_trace[-1] = 1.0
+                 is_fluid_R[-1] = True
+             
+             # Interior values
+             p_L_trace[1:] = p
+             theta_L_trace[1:] = theta
+             is_fluid_L[1:] = is_fluid
+             
+             p_R_trace[:-1] = p
+             theta_R_trace[:-1] = theta
+             is_fluid_R[:-1] = is_fluid
+             
+             # -- Flux Calculation --
+             F_P_all = -C_all * (p_R_trace - p_L_trace)
+             F_C_all = np.zeros(Nx+1)
+             
+             # Derivatives (Vectors)
+             dF_duL_all = np.zeros(Nx+1)
+             dF_duR_all = np.zeros(Nx+1)
+             
+             # Poiseuille Derivs
+             # If L is active (f>0) and fluid
+             mask_L_active = is_fluid_L.copy(); mask_L_active[0] = False
+             dF_duL_all[mask_L_active] += C_all[mask_L_active]
+             
+             # If R is active (f<Nx) and fluid
+             mask_R_active = is_fluid_R.copy(); mask_R_active[-1] = False
+             dF_duR_all[mask_R_active] -= C_all[mask_R_active]
+             
+             # Couette Flux with Patir-Cheng shear flow factor
+             h_L = np.empty(Nx+1); h_L[0]=h[0]; h_L[1:]=h
+             h_R = np.empty(Nx+1); h_R[-1]=h[-1]; h_R[:-1]=h
+             rho_L = np.empty(Nx+1); rho_L[0]=rho0; rho_L[1:]=rho_f
+             rho_R = np.empty(Nx+1); rho_R[-1]=rho0; rho_R[:-1]=rho_f
+             
+             # Compute shear flow factor at nodes
+             phi_s_nodes = phi_s_func(h, sigma=sigma_combined)
+             phi_s_L = np.empty(Nx+1); phi_s_L[0]=0.0; phi_s_L[1:]=phi_s_nodes
+             phi_s_R = np.empty(Nx+1); phi_s_R[-1]=0.0; phi_s_R[:-1]=phi_s_nodes
+             phi_s_face = 0.5 * (phi_s_L + phi_s_R)
+             
+             # Sliding velocity (V1 - V2)
+             # Ve = (U1+U2)/2, Vs = U1 - U2
+             # Shear term: sigma * Vs * phi_s / 2
+             F_shear = 0.5 * sigma_combined * Vs * phi_s_face
+             
+             if Ve >= 0:
+                 # Source L (upwind from left)
+                 q = rho_L * h_L * theta_L_trace
+                 F_C_all = q * Ve + F_shear
+                 # Deriv L if Cavity and Active L
+                 mask_L_cav = (~is_fluid_L); mask_L_cav[0] = False
+                 dF_duL_all[mask_L_cav] += (rho_L * h_L * Ve)[mask_L_cav]
+             else: # Ve < 0
+                 # Source R (upwind from right)
+                 q = rho_R * h_R * theta_R_trace
+                 F_C_all = q * Ve + F_shear
+                 # Deriv R if Cavity and Active R
+                 mask_R_cav = (~is_fluid_R); mask_R_cav[-1] = False
+                 dF_duR_all[mask_R_cav] += (rho_R * h_R * Ve)[mask_R_cav]
+                 
+             Flux_total = F_P_all + F_C_all
+             
+             # -- Squeeze Term (Transient) --
+             # Term: d(rho*h*theta)/dt * dx
+             # Integration: [Flux_out - Flux_in] + Squeeze_i * dx = 0
+             # We treat Squeeze as a "Source" added to the Residual equation for node i.
+             # Resid[i] = Flux_total[i+1] - Flux_total[i] + Squeeze_i * dx
+             # But here Resid = Out - In. So we just add Squeeze term to Resid.
+             
+             Squeeze_val = np.zeros(Nx)
+             dS_dp = np.zeros(Nx)
+             dS_dtheta = np.zeros(Nx)
+             
+             if (h_prev is not None) and (rho_prev is not None) and (theta_prev is not None) and (dt > 1e-12):
+                 # Current Mass
+                 mass_curr = rho_f * h * theta
+                 mass_prev = rho_prev * h_prev * theta_prev
+                 
+                 Squeeze_val = (mass_curr - mass_prev) / dt
+                 
+                 # Derivatives for Jacobian
+                 # d(S)/dp = (1/dt) * [ d(rho)/dp * h * theta + rho * dh/dp * theta ] -> dh/dp approx 0 in rigid limit defl?
+                 # ideally dh/dp comes from elastic, but here we assume fixed h in inner loop (or weak coupling).
+                 # Main term is d(rho)/dp.
+                 # rho_dowson_higginson derivative? 
+                 # rho = rho0 * frac * therm.
+                 # d_frac/dp = ...
+                 # For robustness, we can neglect d_rho/dp or approx it.
+                 # Let's use simple approx or FD? No, analytical best.
+                 # d(rho)/dp approx 0.6e-9 * rho0 approx.
+                 
+                 # Using numerical d_rho/dp or simplification:
+                 # S = (rho(p)*h*theta - M_old)/dt
+                 # dS/dp = (h*theta/dt) * drho/dp (Fluid only)
+                 # dS/dtheta = (rho*h/dt) (Cavity only)
+                 
+                 # Fluid: theta=1. dS/dp active.
+                 # Cavity: p=0. dS/dtheta active.
+                 
+                 # Corrected analytic d_rho/dp
+                 # rho = rho0 * therm * (D1 + D2 p) / (D1 + p)
+                 # d_rho/dp = rho0 * therm * [ D2(D1+p) - (D1+D2 p) ] / (D1+p)^2
+                 #          = rho0 * therm * [ D1(D2-1) ] / (D1+p)^2
+                 D1 = 0.59e9; D2 = 1.34
+                 therm = (1.0 - gamma_th * dT_f) # approx constant dT for Jacobian
+                 d_rho_dp = (rho0 * therm * D1 * (D2 - 1.0)) / ((D1 + p)**2 + 1e-30)
+                 
+                 # dS/dp = (h/dt) * d_rho/dp (Fluid nodes only: theta=1)
+                 dS_dp[is_fluid] = (h[is_fluid] / dt) * d_rho_dp[is_fluid]
+                 
+                 # dS/dtheta = (rho*h/dt) (Cavity nodes: p=0, rho=rho0*therm)
+                 dS_dtheta[~is_fluid] = (rho_f[~is_fluid] * h[~is_fluid]) / dt
+             
+             # Assemble Jacobian and Residual
+             Resid = Flux_total[1:] - Flux_total[:-1] # Out - In
+             
+             # Add Squeeze Source
+             # Eq: Div(Flux) + d(rho h theta)/dt = 0
+             # FV: (F_out - F_in)/dx + Squeeze_i = 0  => Resid (Flux diff) + Squeeze_i * dx = 0
+             SQ_term = Squeeze_val * dx
+             Resid += SQ_term
+             
+             if observe and (i_load==load_iters-1) and (i_murty==0):
+                 # Diagnostic: Check magnitudes
+                 # F_P is Poiseuille flux (approx D * dp/dx ~ D * P/L)
+                 # F_C is Couette flux (rho h Ve)
+                 # SQ is Squeeze flux equivalent (Squeeze * dx)
+                 print(f"DEBUG FLUX: Max|FP|={np.max(np.abs(F_P_all)):.2e} Max|FC|={np.max(np.abs(F_C_all)):.2e} Max|SQ*dx|={np.max(np.abs(SQ_term)):.2e} dt={dt:.2e}")
+             
+             J_mdiag = dF_duL_all[1:] - dF_duR_all[:-1]
+             
+             # Add Squeeze Diagonal contributions
+             # If Fluid: var is p. J_mdiag += dRes/dp = dS/dp * dx
+             J_mdiag[is_fluid] += dS_dp[is_fluid] * dx
+             
+             # If Cavity: var is theta. J_mdiag += dRes/dtheta = dS/dtheta * dx
+             J_mdiag[~is_fluid] += dS_dtheta[~is_fluid] * dx
+             
+             J_upper = dF_duR_all[1:]
+             J_lower = -dF_duL_all[:-1]
+             
+             dx_sol = thomas_solve(J_lower, J_mdiag, J_upper, -Resid)
+             
+             # Update Active Variables
+             # Adaptive relaxation based on residual magnitude
+             resid_mag = np.max(np.abs(Resid))
+             if resid_mag > 1e-3:
+                 relax = 0.3  # Stronger damping for large residuals
+             else:
+                 relax = 0.6
+                 
+             dx_sol *= relax
+             
+             # Limit Newton step size to prevent divergence
+             max_dp = 0.2 * (ph + 1e6)  # 20% of Hertzian pressure
+             dx_sol = np.clip(dx_sol, -max_dp, max_dp)
+             
+             state_changed = False
+             
+             p_new = p.copy()
+             p_new[is_fluid] += dx_sol[is_fluid]
+             
+             # Physical pressure ceiling: p <= 2 * ph_hertz
+             p_ceiling = 2.0 * ph
+             p_new = np.clip(p_new, 0.0, p_ceiling)
+             
+             theta_new = theta.copy()
+             theta_new[~is_fluid] += dx_sol[~is_fluid]
+             
+             # Check switch
+             # Fluid -> Cavity (p < 0)
+             switch_to_cav = is_fluid & (p_new < 0.0)
+             if np.any(switch_to_cav):
+                 p_new[switch_to_cav] = 0.0
+                 theta_new[switch_to_cav] = 1.0 # Reset
+                 is_fluid[switch_to_cav] = False
+                 state_changed = True
+                 
+             # Cavity -> Fluid (theta > 1)
+             switch_to_fluid = (~is_fluid) & (theta_new > 1.0)
+             if np.any(switch_to_fluid):
+                 theta_new[switch_to_fluid] = 1.0
+                 p_new[switch_to_fluid] = 0.0
+                 is_fluid[switch_to_fluid] = True
+                 state_changed = True
+                 
+             # Clamp Theta lower bound
+             theta_new[~is_fluid] = np.maximum(theta_new[~is_fluid], 0.0)
+             
+             p = p_new
+             theta = theta_new
+                         
+             if np.linalg.norm(Resid) < 1e-6 and not state_changed:
+                  break
+        
+        # Load Balance (Safeguarded Secant)
+        W_hydro = np.sum(p) * dx * L
+        W_asp_force = np.sum(p_asp) * dx * L
+        W_calc = W_hydro + W_asp_force
+        
+        err_W = (W_calc - W_target) / (W_target + 1e-30)
+        
+        load_hist.append((h0_loop, err_W))
+        
+        if abs(err_W) < load_tol:
+            break
+            
+        d_h0 = 0.0
+        # Safeguarded Secant
+        # Robust Integral Control
+        # Secant is unstable in highly non-linear percolation regime.
+        # Positive sign: Err > 0 (Load > Target) -> Need Increase h0.
+        # Adaptive Gain
+        # If we bracket the solution (Error sign change), reduce gain to converge.
+        if len(load_hist) > 1:
+             h_prev, err_prev = load_hist[-2]
+             h_curr, err_curr = load_hist[-1]
+             if err_curr * err_prev < 0.0:
+                 gain_load *= 0.2
+                 # print(f"DEBUG: Bracket found. Reducing gain to {gain_load}")
+        
+        # Integral Control allowing zero-crossing
+        # Scaling by max(abs(h0), 2e-6) maintains speed near contact
+        ref_h = max(abs(h0_loop), 2.0e-6)
+        d_h0 = gain_load * ref_h * err_W
+        
+        # Limit step to avoid wild oscillation
+        max_step = 0.5 * max(abs(h0_loop), 1e-6)
+        d_h0 = np.clip(d_h0, -max_step, max_step)
+
+        
+        h0_loop += d_h0
+        h0_loop = max(h0_loop, 1e-12)  # 1pm floor for better convergence
+        h0_curr = h0_loop
+
+    return {
+        "x": x,
+        "p": p,
+        "p_asp": p_asp,
+        "h": h,
+        "X": x / (a + 1e-30),
+        "theta": theta,
+        "p_asp_x": p_asp,
+        "Fh": 0.0, 
+        "Fb": 0.0,
+        "Wa": float(np.sum(p_asp)*dx*L),
+        "Wh": float(np.sum(p)*dx*L),
+        "Wext": W_ext,
+        "load_residual": float(err_W),
+        "a": a,
+        "pmax": float(np.max(p)),
+        "h0": h0_curr,
+        "rho": rho_f
+    }
