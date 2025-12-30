@@ -90,6 +90,18 @@ class EHLSolver:
         self.mu_b = 0.12
 
         # ------------------------
+        # Limiting shear stress (Eyring) parameters for non-Newtonian behavior
+        # References: Bair & Winer (1979), Johnson & Tevaarwerk (1977)
+        # tau_limit = tau_0 + gamma_L * P, but capped at tau_max
+        # tau_max represents the physical maximum limiting shear stress of the lubricant
+        # Typical values: tau_0 ~ 2-10 MPa, gamma_L ~ 0.02-0.08, tau_max ~ 50-100 MPa
+        # Reference: Bair (2007) "High Pressure Rheology for Quantitative Elastohydrodynamics"
+        # ------------------------
+        self.tau_0 = 5.0e6       # Pa - base limiting shear stress
+        self.gamma_L = 0.04     # limiting shear stress pressure coefficient  
+        self.tau_max = 50.0e6   # Pa - maximum limiting shear stress (physical upper bound)
+
+        # ------------------------
         # Internal state variables updated per step
         # ------------------------
         self.R = None
@@ -673,10 +685,46 @@ class EHLSolver:
         # Flow factors (optional inclusion consistent with your Reynolds formulation)
         phi_x, phi_s = self.calc_flow_factors(H_nd)
 
-        # Shear components (Pa)
-        tau_couette = mu * phi_s * (self.Vs / h)
-        tau_poiseuille = -0.5 * h * phi_x * dpdx
-        tau_h = tau_couette + tau_poiseuille
+        # ===== LIMITING SHEAR STRESS MODEL (EYRING) =====
+        # References: Bair & Winer (1979), Johnson & Tevaarwerk (1977)
+        # At high shear rates (thin films), Newtonian stress would be unrealistically high.
+        # The Eyring model provides a physics-based limiting shear stress that depends on pressure.
+        
+        # Pressure-dependent limiting shear stress: tau_limit = min(tau_0 + gamma_L*P, tau_max)
+        tau_limit = np.minimum(self.tau_0 + self.gamma_L * p_rey, self.tau_max)
+        
+        # Newtonian shear stress components
+        tau_couette_N = mu * phi_s * (self.Vs / h)
+        tau_poiseuille_N = -0.5 * h * phi_x * dpdx
+        tau_N_total = tau_couette_N + tau_poiseuille_N
+        
+        # Eyring limiting with tanh for smooth plateau behavior
+        # This physically caps the shear stress when Newtonian would exceed the limiting value
+        # tau_eff = tau_limit * tanh(tau_N / tau_limit)
+        # At low shear: tau_eff ≈ tau_N (Newtonian behavior)
+        # At high shear: tau_eff → tau_limit (limiting behavior)
+        ratio = tau_N_total / np.maximum(tau_limit, 1e-6)
+        tau_eff = tau_limit * np.tanh(ratio)
+        
+        # ===== MIXED LUBRICATION FRICTION PARTITIONING =====
+        # Reference: Zhu & Hu (2001), "A Computer Program Package for the Prediction 
+        # of EHL and Mixed Lubrication Characteristics", Tribology Transactions
+        # 
+        # In mixed lubrication, the contact area is partitioned between:
+        # - Fluid-lubricated regions (hydrodynamic friction applies)
+        # - Asperity contact regions (boundary friction applies)
+        #
+        # Lambda ratio: Lambda = h / sigma (film thickness / composite roughness)
+        # f_hydro = fraction of contact area with fluid lubrication
+        # f_hydro = 1 - exp(-0.5 * Lambda)
+        #
+        # At thin films (Lambda → 0): f_hydro → 0, contact is mostly asperity
+        # At thick films (Lambda → ∞): f_hydro → 1, contact is mostly fluid
+        Lambda = h / self.sigma
+        f_hydro = 1.0 - np.exp(-0.5 * Lambda)
+        
+        # Apply regime-based partitioning to hydrodynamic shear
+        tau_h = f_hydro * tau_eff
 
         # Integrate friction forces (N)
         Fh = self.B * np.trapz(np.abs(tau_h), x_m)
@@ -746,15 +794,22 @@ class EHLSolver:
                 if success and change < 0.2:
                     break
 
-            # Retry fallback (kept)
+            # Retry fallback with multiple attempts
             if res > 1e-6 or not success:
                 if verbose:
                     print(f"[RPM {rpm}] Step {i+1} retry: resetting to Hertzian guess.")
                 V_current = self.build_initial_guess()
                 self.update_history(V_current)
-                V_new, success, res, iters = self.newton_solve(V_current, tol=1e-6, max_iter=35)
+                V_new, success, res, iters = self.newton_solve(V_current, tol=1e-6, max_iter=50)
                 V_current = V_new
-
+                
+                # Second retry with relaxed tolerance if still not converged
+                if res > 1e-5 or not success:
+                    if verbose:
+                        print(f"[RPM {rpm}] Step {i+1} second retry with more iterations.")
+                    V_new, success, res, iters = self.newton_solve(V_current, tol=1e-5, max_iter=70)
+                    V_current = V_new
+            
             P_rey, Pa, H = self.get_full_state(V_current)
 
             # Load check (dimensional)

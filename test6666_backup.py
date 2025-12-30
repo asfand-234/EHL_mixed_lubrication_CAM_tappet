@@ -695,17 +695,7 @@ class EHLSolver:
         
         # Limiting with tanh for plateau behavior
         ratio = tau_N_total / tau_limit
-        tau_eff = tau_limit * np.tanh(ratio)
-        
-        # Mixed lubrication friction partitioning based on λ-ratio (Zhu & Hu 2001)
-        # λ = h/σ determines lubrication regime
-        # In boundary regime (λ < 1): friction transitions from hydrodynamic to asperity
-        # The fraction of hydrodynamic friction is 1 - exp(-λ/2), giving smooth transition
-        Lambda = h / self.sigma
-        f_hydro = 1.0 - np.exp(-0.5 * Lambda)
-        
-        # Apply regime-based weighting
-        tau_h = f_hydro * tau_eff
+        tau_h = tau_limit * np.tanh(ratio)
 
         # Integrate friction forces (N)
         Fh = self.B * np.trapz(np.abs(tau_h), x_m)
