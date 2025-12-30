@@ -1,0 +1,1026 @@
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import time
+import os
+
+
+# ======================================================================================
+# 1) PHYSICS SECTION
+#    1D Transient Mixed Lubrication (Line Contact) with Mass-Conserving Reynolds Equation
+# ======================================================================================
+
+class EHLSolver:
+    def __init__(self, lift_file="updated_lift.txt"):
+        # ------------------------
+        # Reference / scaling
+        # ------------------------
+        self.P0_ref = 0.5e9  # Pa (pressure scale used in non-dimensionalization)
+
+        # ------------------------
+        # Lubricant viscosity model parameters (Houpert-like)
+        # ------------------------
+        self.mu00 = 0.01381
+        self.muinf = 6.315e-5
+        self.Pr = 1.98e8
+        self.alpha_input = 15e-9
+        self.z_input = 0.65
+
+        # ------------------------
+        # Elastic modulus (reduced)
+        # ------------------------
+        self.E_prime = 217e9  # Pa
+
+        # ------------------------
+        # Geometry / line-contact length (into-page length)
+        # NOTE: In your code, Wl = W / B, so B behaves as the line-contact length L.
+        # ------------------------
+        self.B = 7.3e-3  # m (contact length L)
+
+        # ------------------------
+        # Density/thermal parameters
+        # ------------------------
+        self.rho0 = 870.0
+        self.Cp = 2000.0
+
+        # ------------------------
+        # Discretization / transient
+        # ------------------------
+        self.N = 81
+        self.delta_ad = 0.05
+        self.is_transient = True
+        self.dt = None
+        self.rho_old = None
+        self.H_old = None
+
+        # ------------------------
+        # Roughness / asperity (Greenwood-Tripp-like fit you used)
+        # ------------------------
+        self.sigma = 0.2e-6
+        self.eta_beta_sigma = 0.05
+        self.sigma_beta_ratio = 0.001
+        self.K_GT = (16 * np.pi * np.sqrt(2) / 15) * (self.eta_beta_sigma**2) * np.sqrt(self.sigma_beta_ratio) * self.E_prime
+        self.sigma_factor = 1.0
+
+        # ------------------------
+        # Thermal model (as in your code)
+        # ------------------------
+        self.T0_C = 90.0
+        self.T0_K = self.T0_C + 273.15
+        self.beta0 = 0.04
+        self.gamma_therm = 6.5e-4
+        self.k_therm = 0.15
+
+        ln_eta0 = np.log(self.mu00)
+        self.S0 = self.beta0 * (self.T0_K - 138.0) / (ln_eta0 + 9.67)
+        self.Z_houper = self.alpha_input / (5.11e-9 * (ln_eta0 + 9.67))
+
+        # ------------------------
+        # Newton/penalty parameters (kept from your code)
+        # ------------------------
+        self.hmin_dim = 0.0
+        self.gamma_h = 1e12
+        self.g1 = None  # set when operating state is updated
+
+        # ------------------------
+        # Boundary friction coefficient (asperity friction)
+        # Adjust as needed for your boundary regime (typical range ~0.05–0.12)
+        # ------------------------
+        self.mu_b = 0.12
+
+        # ------------------------
+        # Limiting shear stress (Eyring) parameters for non-Newtonian behavior
+        # References: Bair & Winer (1979), Johnson & Tevaarwerk (1977)
+        # tau_limit = tau_0 + gamma_L * P
+        # Typical values: tau_0 ~ 2-10 MPa, gamma_L ~ 0.02-0.08
+        # ------------------------
+        self.tau_0 = 5.0e6       # Pa - base limiting shear stress
+        self.gamma_L = 0.05     # limiting shear stress pressure coefficient
+
+        # ------------------------
+        # Internal state variables updated per step
+        # ------------------------
+        self.R = None
+        self.Um = None
+        self.Um_mag = None
+        self.Um_sign = None
+        self.Vs = None
+        self.W = None
+
+        # ------------------------
+        # Load lift profile (theta, lift, derivatives). Kinematics computed per RPM.
+        # ------------------------
+        self.profile = self.load_lift_profile(lift_file)
+
+        # Temperature field
+        self.T_current = np.full(self.N, self.T0_K)
+
+        # Grid placeholders (initialized per RPM once max_a_over_r is known)
+        self.X_dim = None
+        self.X = None
+        self.dx = None
+        self.D_mat = None
+        self.CE = -4 * self.P0_ref / (np.pi * self.E_prime)
+
+    # ------------------------
+    # Profile / kinematics
+    # ------------------------
+    def load_lift_profile(self, path):
+        if not os.path.exists(path):
+            alt = r"/content/cam/updated_lift.txt"
+            if os.path.exists(alt):
+                path = alt
+
+        data = np.loadtxt(path)
+        theta_deg = data[:, 0]
+        lift = data[:, 1]
+        theta_rad = np.deg2rad(theta_deg)
+
+        dlift = np.gradient(lift, theta_rad)
+        ddlift = np.gradient(dlift, theta_rad)
+
+        rb = 18.4e-3  # m (base circle radius)
+
+        return {
+            "theta_deg": theta_deg,
+            "theta_rad": theta_rad,
+            "lift": lift,
+            "dlift": dlift,
+            "ddlift": ddlift,
+            "rb": rb
+        }
+
+    def compute_cam_kinematics(self, rpm):
+        theta_deg = self.profile["theta_deg"]
+        theta_rad = self.profile["theta_rad"]
+        lift = self.profile["lift"]
+        dlift = self.profile["dlift"]
+        ddlift = self.profile["ddlift"]
+        rb = self.profile["rb"]
+
+        omega = (2 * np.pi * rpm) / 60.0
+
+        # Keep your original definitions (do not change physics here)
+        Vc = (rb + lift + ddlift) * omega
+        Vf = omega * ddlift
+        um = (Vf + Vc) / 2.0
+        Vs = Vc - Vf
+        R = ddlift + lift + rb
+
+        # Spring-mass load model (as in your code)
+        K_spring = 7130.0
+        delta = 1.77e-3
+        M_eq = 0.05733
+        F = K_spring * (lift + delta) + ddlift * M_eq * omega**2
+
+        # Transient step sizes
+        dt = np.gradient(theta_rad) / omega
+        time_arr = (theta_rad - theta_rad[0]) / omega
+
+        # Estimate max_a_over_r for grid sizing
+        Wl = np.maximum(F, 0.0) / self.B
+        R_eff = np.maximum(R, 1e-12)
+        a_hertz = np.sqrt(8 * Wl * R_eff / (np.pi * self.E_prime))
+        a_over_r = a_hertz / R_eff
+        max_a_over_r = np.max(a_over_r)
+
+        return {
+            "rpm": rpm,
+            "omega": omega,
+            "theta_deg": theta_deg,
+            "theta_rad": theta_rad,
+            "lift": lift,
+            "um": um,
+            "Vs": Vs,
+            "R": R,
+            "F": F,
+            "dt": dt,
+            "time": time_arr,
+            "max_a_over_r": max_a_over_r,
+            "rb": rb,
+            "Vc": Vc,
+            "Vf": Vf,
+        }
+
+    # ------------------------
+    # Grid + elastic influence matrix
+    # ------------------------
+    def setup_grid(self, max_a_over_r):
+        left = -5.0 * max_a_over_r
+        right = 3.0 * max_a_over_r
+        self.X_dim = np.linspace(left, right, self.N)     # dimensionless x/R
+        self.X = self.X_dim.copy()
+        self.dx = self.X_dim[1] - self.X_dim[0]
+        self.calculate_D_matrix()
+
+        # Reset thermal and transient history for a fresh run
+        self.T_current = np.full(self.N, self.T0_K)
+        self.rho_old = None
+        self.H_old = None
+
+    def calculate_D_matrix(self):
+        N = self.N
+        dx = self.dx
+        D = np.zeros((N, N))
+        b = dx / 2.0
+
+        for i in range(N):
+            xi = self.X_dim[i]
+            for j in range(N):
+                xj = self.X_dim[j]
+                d1 = xi - (xj - b)
+                d2 = xi - (xj + b)
+
+                def F(u):
+                    if abs(u) < 1e-12:
+                        return 0.0
+                    return u * np.log(abs(u)) - u
+
+                D[i, j] = (F(d1) - F(d2))
+
+        self.D_mat = D * self.CE
+
+    # ------------------------
+    # Operating state updates
+    # ------------------------
+    def update_operating_state(self, um, vs, R, load):
+        self.Um = um
+        self.Vs = vs
+        self.R = max(R, 1e-12)  # avoid non-physical / division issues
+        self.W = load
+
+        self.Um_mag = max(abs(self.Um), 1e-9)
+        self.Um_sign = 1.0 if self.Um >= 0 else -1.0
+
+        # Scaling used in your Reynolds residual
+        self.A_C = self.R * self.P0_ref / (12 * self.mu00 * self.Um_mag)
+        self.u1d = self.Um_sign
+
+        # Hertz reference quantities
+        Wl = self.W / self.B
+        self.a_Hertz = np.sqrt(8 * Wl * self.R / (np.pi * self.E_prime)) if Wl > 0 else 0.0
+        self.Pmh = 2 * Wl / (np.pi * self.a_Hertz) if self.a_Hertz > 0 else 0.0
+
+        # Load non-dimensionalization used in your constraint
+        self.Wld = Wl / (self.R * self.P0_ref)
+
+        Rey_Stiffness = self.A_C / (self.dx**2)
+        self.g1 = 1e15 * Rey_Stiffness
+
+    # ------------------------
+    # Flow factors
+    # ------------------------
+    def calc_flow_factors(self, H_dimless):
+        if self.sigma_factor <= 0.0:
+            ones = np.ones_like(H_dimless)
+            return ones, ones
+
+        sigma_eff = self.sigma * self.sigma_factor
+        h_real = H_dimless * self.R
+        lambda_ratio = h_real / sigma_eff
+        lambda_ratio = np.where(lambda_ratio < 0.0, 0.0, lambda_ratio)
+
+        phi_x = 1.0 - 0.9 * np.exp(-0.56 * lambda_ratio)  # pressure flow factor
+        phi_s = 1.0 - 0.9 * np.exp(-0.2 * lambda_ratio)   # shear flow factor
+        return phi_x, phi_s
+
+    # ------------------------
+    # Density / viscosity
+    # ------------------------
+    def ro(self, P_dim_less, T_K=None):
+        if T_K is None:
+            T_K = self.T_current
+        P = np.maximum(P_dim_less * self.P0_ref, 0.0)
+        a = 0.6e-9
+        b = 1.7e-9
+        term_p = (1 + (a * P) / (1 + b * P))
+        DeltaT = T_K - self.T0_K
+        term_T = (1 - self.gamma_therm * DeltaT)
+        return term_p * term_T
+
+    def droo(self, P_dim_less, T_K=None):
+        if T_K is None:
+            T_K = self.T_current
+        P = np.maximum(P_dim_less * self.P0_ref, 0.0)
+        a = 0.6e-9
+        b = 1.7e-9
+        df_dP = a / ((1 + b * P) ** 2)
+        DeltaT = T_K - self.T0_K
+        term_T = (1 - self.gamma_therm * DeltaT)
+        return df_dP * self.P0_ref * term_T
+
+    def c_mu(self, P_dim_less, T_K=None):
+        if T_K is None:
+            T_K = self.T_current
+        P = np.maximum(P_dim_less * self.P0_ref, 0.0)
+
+        ln_eta0 = np.log(self.mu00)
+        C1 = ln_eta0 + 9.67
+
+        T_term = (T_K - 138.0) / (self.T0_K - 138.0)
+        T_term = np.maximum(T_term, 1e-5)
+        term_T_S0 = T_term ** (-self.S0)
+
+        term_P_Z = (1 + P / self.Pr) ** self.Z_houper
+        exponent = C1 * (term_T_S0 * term_P_Z - 1.0)
+
+        exponent = np.minimum(exponent, 50.0)
+        return self.mu00 * np.exp(exponent)
+
+    # ------------------------
+    # Thermal update (kept as-is)
+    # ------------------------
+    def calc_temperature_rise(self, P_dist, H_dist, Pa_dist=None):
+        um = self.Um_mag
+        gamma = self.gamma_therm
+        k = self.k_therm
+        a_hertz = self.a_Hertz if self.a_Hertz > 0 else 1.0
+
+        P_real = P_dist * self.P0_ref
+        h = np.maximum(H_dist * self.R, 1e-9)
+
+        eta = self.c_mu(P_dist, self.T_current)
+        T = self.T_current
+
+        num_term_1 = um * T * gamma * h * P_real
+        num_term_2 = (2.0 * a_hertz * eta * um**2) / h
+
+        den = (a_hertz * k) / h - um * gamma * h * P_real
+        den = np.where(den < 1e-5, 1e-5, den)
+
+        Delta_T = (num_term_1 + num_term_2) / den
+        T_new = self.T0_K + Delta_T
+        return T_new
+
+    # ------------------------
+    # Asperity pressure model
+    # ------------------------
+    def calc_asperity(self, H_dimless, calc_deriv=False):
+        H_real = H_dimless * self.R
+        Lambda = H_real / self.sigma
+        mask = Lambda < 4.0
+
+        Pa_real = np.zeros_like(Lambda)
+        dPa_dH_real = np.zeros_like(Lambda)
+
+        if np.any(mask):
+            val = 4.0 - Lambda[mask]
+            A_fit = 4.4084e-5
+            Z_fit = 6.804
+            F_stat = A_fit * (val ** Z_fit)
+            dF_dL = -A_fit * Z_fit * (val ** (Z_fit - 1))
+
+            Pa_real[mask] = self.K_GT * F_stat * self.sigma_factor
+            if calc_deriv:
+                dPa_dH_real[mask] = (self.K_GT * dF_dL * self.sigma_factor) / self.sigma
+
+        Pa_dim = Pa_real / self.P0_ref
+        if calc_deriv:
+            return Pa_dim, (dPa_dH_real * self.R) / self.P0_ref
+        return Pa_dim
+
+    # ------------------------
+    # Mass-conserving Reynolds residual helpers
+    # ------------------------
+    def beta_ad(self, P, H, eps_shift):
+        idx = np.arange(2, self.N - 1)
+        rho_prime = self.droo(P)
+        val = self.dx * rho_prime * H
+        if eps_shift == 0:
+            beta = 0.5 * (val[idx] + val[idx - 1])
+        else:
+            beta = 0.5 * (val[idx] + val[idx + 1])
+        return beta * (self.delta_ad / self.A_C)
+
+    def get_eps_beta(self, P, H):
+        idx = np.arange(2, self.N - 1)
+        rho = self.ro(P)
+        mu = self.c_mu(P)
+        phi_x, _ = self.calc_flow_factors(H)
+
+        rho_1 = rho[idx] + rho[idx - 1]
+        mu_1 = mu[idx] + mu[idx - 1]
+        H_1 = H[idx] + H[idx - 1]
+        phi_1 = 0.5 * (phi_x[idx] + phi_x[idx - 1])
+        eps1 = (rho_1 * (H_1 ** 3) * 0.125 * phi_1 / mu_1) + self.beta_ad(P, H, 0)
+
+        rho_2 = rho[idx] + rho[idx + 1]
+        mu_2 = mu[idx] + mu[idx + 1]
+        H_2 = H[idx] + H[idx + 1]
+        phi_2 = 0.5 * (phi_x[idx] + phi_x[idx + 1])
+        eps2 = (rho_2 * (H_2 ** 3) * 0.125 * phi_2 / mu_2) + self.beta_ad(P, H, 1)
+
+        return eps1, eps2
+
+    def calc_reynolds_residual(self, P_rey, H):
+        idx = np.arange(2, self.N - 1)
+        eps1, eps2 = self.get_eps_beta(P_rey, H)
+
+        term_pois = (self.A_C / self.dx**2) * (
+            P_rey[idx - 1] * eps1 - P_rey[idx] * (eps1 + eps2) + P_rey[idx + 1] * eps2
+        )
+
+        rho = self.ro(P_rey)
+        _, phi_s = self.calc_flow_factors(H)
+
+        term_couette = (self.u1d / self.dx) * (
+            rho[idx] * H[idx] * phi_s[idx] - rho[idx - 1] * H[idx - 1] * phi_s[idx - 1]
+        )
+
+        term_squeeze = 0.0
+        if self.is_transient and self.rho_old is not None:
+            term_time = (rho[idx] * H[idx] - self.rho_old[idx] * self.H_old[idx]) / self.dt
+            term_squeeze = (self.R / self.Um_mag) * term_time
+
+        f1 = self.gamma_h * np.minimum(P_rey[idx], 0.0)
+        f4 = self.g1 * np.maximum(self.hmin_dim - H[idx], 0.0) ** 2
+
+        F_rey = term_pois - term_couette - term_squeeze - f1 + f4
+        return F_rey * (self.dx**2 / self.A_C)
+
+    # ------------------------
+    # Full nonlinear system: Reynolds + film equation + load balance
+    # ------------------------
+    def system_func(self, V):
+        n_inner = self.N - 3
+        P_inner = V[:n_inner]
+        H_inner = V[n_inner:2 * n_inner]
+        H0 = V[-1]
+
+        P_rey = np.zeros(self.N)
+        P_rey[2:-1] = P_inner
+
+        H = np.zeros(self.N)
+        H[2:-1] = H_inner
+        H[0] = H0 + (self.X[0] ** 2) / 2
+        H[1] = H0 + (self.X[1] ** 2) / 2
+        H[-1] = H0 + (self.X[-1] ** 2) / 2
+
+        Pa, _ = self.calc_asperity(H, calc_deriv=True)
+        P_tot = P_rey + Pa
+
+        D_term = self.D_mat @ P_tot
+        H_elastic = H0 + (self.X ** 2) / 2 + D_term
+
+        H[0] = H_elastic[0]
+        H[1] = H_elastic[1]
+        H[-1] = H_elastic[-1]
+
+        F_rey = self.calc_reynolds_residual(P_rey, H)
+        idx = np.arange(2, self.N - 1)
+        F_film = H[idx] - H_elastic[idx]
+
+        integral = np.sum(P_tot * self.dx)
+        F_load = (self.Wld - integral) / self.Wld if self.Wld != 0 else (self.Wld - integral)
+
+        return np.concatenate([F_rey, F_film, [F_load]])
+
+    # ------------------------
+    # Jacobian (finite-difference for Reynolds part; analytic blocks for film/load)
+    # ------------------------
+    def calc_jacobian(self, V):
+        n_inner = self.N - 3
+        P_inner = V[:n_inner]
+        N_vars = len(V)
+        epsilon = 1e-7
+        J = np.zeros((N_vars, N_vars))
+        idx_inner = np.arange(2, self.N - 1)
+
+        H_inner = V[n_inner:2 * n_inner]
+        H0 = V[-1]
+
+        H = np.zeros(self.N)
+        H[2:-1] = H_inner
+        H[0] = H0 + (self.X[0] ** 2) / 2
+        H[1] = H0 + (self.X[1] ** 2) / 2
+        H[-1] = H0 + (self.X[-1] ** 2) / 2
+
+        _, dPa_dH = self.calc_asperity(H, calc_deriv=True)
+        dPa_dH_slice = dPa_dH[idx_inner]
+        D_slice = self.D_mat[np.ix_(idx_inner, idx_inner)]
+
+        # Film equation block
+        J[n_inner:2 * n_inner, 0:n_inner] = -D_slice
+        Mat_dPa = D_slice * dPa_dH_slice[np.newaxis, :]
+        J[n_inner:2 * n_inner, n_inner:2 * n_inner] = np.eye(n_inner) - Mat_dPa
+        J[n_inner:2 * n_inner, -1] = -1.0
+
+        # Load balance row
+        if self.Wld != 0:
+            J[-1, 0:n_inner] = -self.dx / self.Wld
+            J[-1, n_inner:2 * n_inner] = -dPa_dH_slice * self.dx / self.Wld
+        else:
+            J[-1, 0:n_inner] = -self.dx
+            J[-1, n_inner:2 * n_inner] = -dPa_dH_slice * self.dx
+        J[-1, -1] = 0.0
+
+        # Reynolds FD block
+        P_rey = np.zeros(self.N)
+        P_rey[2:-1] = P_inner
+        F0_rey = self.calc_reynolds_residual(P_rey, H)
+
+        for j in range(n_inner):
+            old = P_rey[j + 2]
+            P_rey[j + 2] += epsilon
+            J[:n_inner, j] = (self.calc_reynolds_residual(P_rey, H) - F0_rey) / epsilon
+            P_rey[j + 2] = old
+
+        for j in range(n_inner):
+            old = H[j + 2]
+            H[j + 2] += epsilon
+            J[:n_inner, n_inner + j] = (self.calc_reynolds_residual(P_rey, H) - F0_rey) / epsilon
+            H[j + 2] = old
+
+        old0, old1, oldm1 = H[0], H[1], H[-1]
+        H[0] = H0 + epsilon + (self.X[0] ** 2) / 2
+        H[1] = H0 + epsilon + (self.X[1] ** 2) / 2
+        H[-1] = H0 + epsilon + (self.X[-1] ** 2) / 2
+        J[:n_inner, -1] = (self.calc_reynolds_residual(P_rey, H) - F0_rey) / epsilon
+        H[0], H[1], H[-1] = old0, old1, oldm1
+
+        return J
+
+    # ------------------------
+    # Newton solver with improved line search
+    # ------------------------
+    def newton_solve(self, V_guess, tol=1e-6, max_iter=20):
+        V = V_guess.copy()
+        current_res = np.linalg.norm(self.system_func(V))
+
+        for k in range(max_iter):
+            if current_res < tol:
+                return V, True, current_res, k
+            if not np.isfinite(current_res):
+                return V, False, np.inf, k
+
+            try:
+                J = self.calc_jacobian(V)
+                dV = np.linalg.solve(J, -self.system_func(V))
+            except np.linalg.LinAlgError:
+                return V, False, current_res, k
+
+            dV_clip = np.clip(dV, -0.15, 0.15)
+
+            # Extended line search
+            alpha = 1.0
+            found = False
+            for _ in range(6):
+                V_new = V + alpha * dV_clip
+                new_res_val = np.linalg.norm(self.system_func(V_new))
+                if np.isfinite(new_res_val) and new_res_val < current_res:
+                    V = V_new
+                    current_res = new_res_val
+                    found = True
+                    break
+                alpha *= 0.5
+
+            if not found:
+                V = V + 0.03 * dV_clip
+                current_res = np.linalg.norm(self.system_func(V))
+
+        return V, current_res < tol, current_res, max_iter
+
+    # ------------------------
+    # State extraction / initialization
+    # ------------------------
+    def update_history(self, V):
+        n_inner = self.N - 3
+        P_inner = V[:n_inner]
+        H_inner = V[n_inner:2 * n_inner]
+        H0 = V[-1]
+
+        P_rey = np.zeros(self.N)
+        P_rey[2:-1] = P_inner
+
+        H = np.zeros(self.N)
+        H[2:-1] = H_inner
+        H[0] = H0 + (self.X[0] ** 2) / 2
+        H[1] = H0 + (self.X[1] ** 2) / 2
+        H[-1] = H0 + (self.X[-1] ** 2) / 2
+
+        Pa = self.calc_asperity(H)
+        P_tot = P_rey + Pa
+        D_term = self.D_mat @ P_tot
+        H_elastic = H0 + (self.X ** 2) / 2 + D_term
+
+        self.rho_old = self.ro(P_rey)
+        self.H_old = H_elastic
+
+    def get_full_state(self, V):
+        n_inner = self.N - 3
+        P_inner = V[:n_inner]
+        H_inner = V[n_inner:2 * n_inner]
+        H0 = V[-1]
+
+        P_rey = np.zeros(self.N)
+        P_rey[2:-1] = P_inner
+
+        H = np.zeros(self.N)
+        H[2:-1] = H_inner
+        H[0] = H0 + (self.X[0] ** 2) / 2
+        H[1] = H0 + (self.X[1] ** 2) / 2
+        H[-1] = H0 + (self.X[-1] ** 2) / 2
+
+        Pa = self.calc_asperity(H)
+        P_tot = P_rey + Pa
+        D_term = self.D_mat @ P_tot
+        H_elastic = H0 + (self.X ** 2) / 2 + D_term
+        return P_rey, Pa, H_elastic
+
+    def build_initial_guess(self):
+        P_init = np.zeros(self.N)
+        X_dim_m = self.X_dim * self.R
+        contact = np.abs(X_dim_m) <= self.a_Hertz
+        if self.a_Hertz > 0 and np.any(contact) and self.Pmh > 0:
+            P_init[contact] = self.Pmh * np.sqrt(1 - (X_dim_m[contact] / self.a_Hertz) ** 2) / self.P0_ref
+
+        # Hamrock-Dowson-like H0 estimate (as you used)
+        U_dim = self.mu00 * self.Um_mag / (self.E_prime * self.R)
+        G_dim = self.alpha_input * self.E_prime
+        W_dim = (self.W / self.B) / (self.E_prime * self.R)
+        H_min_nd = 2.65 * (U_dim ** 0.7) * (G_dim ** 0.54) * (W_dim ** -0.13) if W_dim > 0 else 1e-6
+        H0_init = H_min_nd
+
+        D_term = self.D_mat @ P_init
+        H_guess = H0_init + (self.X ** 2) / 2 + D_term
+        return np.concatenate([P_init[2:-1], H_guess[2:-1], [H0_init]])
+
+    # ------------------------
+    # Friction & torque (dimensional) for each cam step
+    # References:
+    #   - Bair & Winer (1979), Johnson & Tevaarwerk (1977) - limiting shear stress
+    #   - Patir & Cheng (1978) - mixed lubrication flow factors
+    #   - In mixed/boundary regime, hydrodynamic friction is weighted by fluid fraction
+    # ------------------------
+    def compute_friction_and_torque(self, P_rey_nd, Pa_nd, H_nd, lift_i):
+        """
+        Hydrodynamic wall shear with Eyring limiting shear stress and mixed lubrication weighting:
+          Lambda ratio λ = h/σ determines lubrication regime
+          Fluid fraction φ_fluid = probability of fluid film existing
+          Hydrodynamic friction is weighted by fluid fraction in mixed regime
+        """
+        R_eff = max(self.R, 1e-12)
+        dx_m = self.dx * R_eff
+        x_m = self.X_dim * R_eff
+
+        # Dimensional fields
+        p_rey = np.maximum(P_rey_nd, 0.0) * self.P0_ref  # Pa
+        p_asp = np.maximum(Pa_nd, 0.0) * self.P0_ref     # Pa
+        p_total = p_rey + p_asp                           # total pressure for limiting shear
+        h = np.maximum(H_nd * R_eff, 1e-9)               # m
+
+        # ===== MIXED LUBRICATION WEIGHTING (Greenwood-Tripp / Patir-Cheng) =====
+        # Lambda ratio: film thickness / composite roughness
+        sigma_composite = self.sigma  # composite roughness
+        Lambda = h / sigma_composite
+        
+        # Fluid fraction: probability of fluid film separating surfaces
+        # For λ < 3: mixed/boundary regime, for λ > 3: full-film EHL
+        # Use cumulative Gaussian approximation (Patir & Cheng style)
+        # phi_fluid ≈ 1 - exp(-0.6 * λ) for smooth transition
+        phi_fluid = 1.0 - np.exp(-0.6 * Lambda)
+        phi_fluid = np.minimum(phi_fluid, 1.0)  # cap at 1.0 for full-film
+
+        # Pressure gradient dp/dx (Pa/m) with smoothing
+        dpdx_raw = np.gradient(p_rey, dx_m)
+        dpdx = np.zeros_like(dpdx_raw)
+        dpdx[0] = dpdx_raw[0]
+        dpdx[1] = 0.5 * dpdx_raw[0] + 0.5 * dpdx_raw[1]
+        dpdx[-1] = dpdx_raw[-1]
+        dpdx[-2] = 0.5 * dpdx_raw[-1] + 0.5 * dpdx_raw[-2]
+        for j in range(2, len(dpdx) - 2):
+            dpdx[j] = 0.1 * dpdx_raw[j-2] + 0.2 * dpdx_raw[j-1] + 0.4 * dpdx_raw[j] + 0.2 * dpdx_raw[j+1] + 0.1 * dpdx_raw[j+2]
+
+        # Local viscosity (Pa*s)
+        mu = self.c_mu(P_rey_nd, self.T_current)
+
+        # Flow factors
+        phi_x, phi_s = self.calc_flow_factors(H_nd)
+
+        # ===== LIMITING SHEAR STRESS (EYRING MODEL) =====
+        tau_limit = self.tau_0 + self.gamma_L * p_total
+        
+        # Newtonian shear components
+        tau_couette_N = mu * phi_s * (self.Vs / h)
+        tau_poiseuille_N = -0.5 * h * phi_x * dpdx
+        tau_N_total = tau_couette_N + tau_poiseuille_N
+        
+        # Apply Eyring model
+        ratio = tau_N_total / tau_limit
+        tau_h_eyring = tau_limit * np.arcsinh(ratio)
+        
+        # ===== MIXED LUBRICATION: WEIGHT HYDRODYNAMIC SHEAR BY FLUID FRACTION =====
+        # In regions where λ < 3, part of the contact is asperity-asperity
+        # Only the fluid-lubricated fraction contributes to hydrodynamic shear
+        tau_h = phi_fluid * tau_h_eyring
+
+        # Integrate friction forces (N)
+        Fh = self.B * np.trapz(np.abs(tau_h), x_m)
+        Fa = self.B * np.trapz(self.mu_b * p_asp, x_m)
+
+        Ft = Fh + Fa
+
+        # Moment arm (m)
+        moment_arm = self.profile["rb"] + lift_i
+
+        # Torque (N*m)
+        T_fric = Ft * moment_arm
+
+        return Fh, Fa, Ft, T_fric
+
+    # ------------------------
+    # Run one cam cycle for a given RPM
+    # ------------------------
+    def run_cam_cycle(self, rpm, verbose=True):
+        cam = self.compute_cam_kinematics(rpm)
+        self.setup_grid(cam["max_a_over_r"])
+
+        theta_deg = cam["theta_deg"]
+        lift_profile = cam["lift"]
+        um_profile = cam["um"]
+        vs_profile = cam["Vs"]
+        R_profile = cam["R"]
+        F_profile = cam["F"]
+        dt_profile = cam["dt"]
+
+        n_steps = len(theta_deg)
+        total_start = time.perf_counter()
+
+        # Time-history storage
+        P_nd_list = []
+        Pa_nd_list = []
+        H_list = []
+        load_err_list = []
+
+        # NEW: friction / torque histories
+        Fh_list = []
+        Fa_list = []
+        Ft_list = []
+        Tq_list = []
+
+        V_current = None
+
+        for i in range(n_steps):
+            t0 = time.perf_counter()
+
+            self.update_operating_state(um_profile[i], vs_profile[i], R_profile[i], F_profile[i])
+            self.dt = dt_profile[i]
+
+            if V_current is None:
+                V_current = self.build_initial_guess()
+
+            self.update_history(V_current)
+
+            # Thermal coupling loop with improved convergence
+            for thermal_iter in range(3):
+                V_new, success, res, iters = self.newton_solve(V_current, tol=1e-7, max_iter=40)
+                P_rey, Pa, H_el = self.get_full_state(V_new)
+                T_new = self.calc_temperature_rise(P_rey, H_el, Pa)
+                change = np.max(np.abs(T_new - self.T_current))
+                self.T_current = 0.6 * T_new + 0.4 * self.T_current
+                V_current = V_new
+                if success and change < 0.1:
+                    break
+
+            # Retry fallback with improved strategy
+            if res > 1e-6 or not success:
+                if verbose:
+                    print(f"[RPM {rpm}] Step {i+1} retry: using fresh Hertzian guess.")
+                # First try: fresh Hertzian guess with more iterations
+                V_hertz = self.build_initial_guess()
+                self.update_history(V_hertz)
+                V_new, success, res, iters = self.newton_solve(V_hertz, tol=1e-6, max_iter=60)
+                
+                # Second try: if still not converged, try relaxed iteration
+                if res > 1e-5:
+                    # Reset with even more conservative solving
+                    for _ in range(3):
+                        V_new2, success2, res2, _ = self.newton_solve(V_new, tol=1e-6, max_iter=30)
+                        if res2 < res:
+                            V_new = V_new2
+                            res = res2
+                        if res < 1e-6:
+                            break
+                            
+                V_current = V_new
+
+            P_rey, Pa, H = self.get_full_state(V_current)
+
+            # Load check (dimensional)
+            integral_load = np.sum((P_rey + Pa) * self.P0_ref * (self.dx * self.R) * self.B)
+            W_eff = max(self.W, 1e-12)
+            ld_err = abs(self.W - integral_load) / W_eff
+
+            # Store state histories
+            P_nd_list.append(P_rey)
+            Pa_nd_list.append(Pa)
+            H_list.append(H)
+            load_err_list.append(ld_err)
+
+            # ------------------------------------------------------------------
+            # Frictions & Torque (NEW SECTION BEFORE PLOTTING)
+            # ------------------------------------------------------------------
+            Fh, Fa, Ft, Tq = self.compute_friction_and_torque(P_rey, Pa, H, lift_profile[i])
+            Fh_list.append(Fh)
+            Fa_list.append(Fa)
+            Ft_list.append(Ft)
+            Tq_list.append(Tq)
+
+            if verbose:
+                dt_step = time.perf_counter() - t0
+                print(f"[RPM {rpm}] Step {i+1}/{n_steps} | Err={ld_err:.2e} | Res={res:.2e} | dt={dt_step:.3f}s")
+
+        elapsed = time.perf_counter() - total_start
+        if verbose:
+            print(f"[RPM {rpm}] Total Time: {elapsed:.2f}s")
+
+        # Convert to arrays
+        P_rey_nd_arr = np.array(P_nd_list)
+        Pa_nd_arr = np.array(Pa_nd_list)
+        H_arr = np.array(H_list)
+
+        Fh_arr = np.array(Fh_list)
+        Fa_arr = np.array(Fa_list)
+        Ft_arr = np.array(Ft_list)
+        Tq_arr = np.array(Tq_list)
+
+        # Average torque over cycle (time-weighted)
+        avg_torque = np.sum(Tq_arr * dt_profile) / np.sum(dt_profile)
+
+        return {
+            "rpm": rpm,
+            "theta_deg": theta_deg,
+            "X_dim": self.X_dim.copy(),
+            "P_rey_nd": P_rey_nd_arr,
+            "Pa_nd": Pa_nd_arr,
+            "H_nd": H_arr,
+            "Fh": Fh_arr,
+            "Fa": Fa_arr,
+            "Ft": Ft_arr,
+            "Tq": Tq_arr,
+            "avg_torque": avg_torque,
+            "cam": cam,
+            "load_err": np.array(load_err_list),
+        }
+
+
+# ======================================================================================
+# 2) PLOT CONTROL & UTILITIES
+# ======================================================================================
+
+# ------------------------
+# Manual RPM control
+# Edit this list to run single or multiple RPMs
+# ------------------------
+RPM_LIST = [300]
+
+# ------------------------
+# Manual plot toggles
+# ------------------------
+PLOT_CAM_KINEMATICS = True
+PLOT_REYNOLDS_PRESSURE_CYCLE = True
+PLOT_ASPERITY_PRESSURE_CYCLE = True
+PLOT_FILM_THICKNESS_CYCLE = True
+PLOT_HYDRO_FRICTION_VS_ANGLE = True
+PLOT_ASP_FRICTION_VS_ANGLE = True
+PLOT_TORQUE_VS_ANGLE = True
+
+
+def plot_cam_kinematics(result, out_prefix="Graph_Cam_Kinematics"):
+    cam = result["cam"]
+    theta_deg = cam["theta_deg"]
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    axes[0, 0].plot(theta_deg, cam["um"])
+    axes[0, 0].set_ylabel("um (m/s)")
+
+    axes[0, 1].plot(theta_deg, cam["Vs"])
+    axes[0, 1].set_ylabel("Vs (m/s)")
+
+    axes[1, 0].plot(theta_deg, cam["R"])
+    axes[1, 0].set_ylabel("R (m)")
+
+    axes[1, 1].plot(theta_deg, cam["F"])
+    axes[1, 1].set_ylabel("F (N)")
+
+    for ax in axes.flat:
+        ax.set_xlabel("Cam angle (deg)")
+        ax.grid(True)
+
+    fig.suptitle(f"Cam Kinematics (RPM = {result['rpm']})")
+    fig.tight_layout()
+    fig.savefig(f"{out_prefix}_RPM{result['rpm']}.png", dpi=200)
+    plt.close(fig)
+
+
+def plot_cycle_field(result, field_arr, title, ylabel, out_name):
+    theta_deg = result["theta_deg"]
+    X_plot = result["X_dim"]
+    n_steps = len(theta_deg)
+
+    colors = plt.cm.viridis(np.linspace(0, 1, n_steps))
+    plt.figure(figsize=(10, 6))
+    for i in range(n_steps):
+        plt.plot(X_plot, field_arr[i], color=colors[i], alpha=0.4, linewidth=0.7)
+
+    plt.xlabel("X/R (non-dimensional)")
+    plt.ylabel(ylabel)
+    plt.title(f"{title} (RPM = {result['rpm']})")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"{out_name}_RPM{result['rpm']}.png", dpi=200)
+    plt.close()
+
+
+def plot_vs_angle(results, key, ylabel, title, out_name):
+    plt.figure(figsize=(10, 6))
+    for r in results:
+        plt.plot(r["theta_deg"], r[key], label=f"{r['rpm']} RPM")
+    plt.xlabel("Cam angle (deg)")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_name, dpi=200)
+    plt.close()
+
+
+def main():
+    solver = EHLSolver(lift_file="updated_lift.txt")
+    all_results = []
+
+    for rpm in RPM_LIST:
+        res = solver.run_cam_cycle(rpm, verbose=True)
+        all_results.append(res)
+
+        # Per-RPM plots
+        if PLOT_CAM_KINEMATICS:
+            plot_cam_kinematics(res)
+
+        if PLOT_REYNOLDS_PRESSURE_CYCLE:
+            plot_cycle_field(
+                res,
+                res["P_rey_nd"],
+                title="Non-dimensional Reynolds Pressure (Cam Cycle)",
+                ylabel="P_rey (p / P0_ref)",
+                out_name="Graph_Reynolds_Pressure_Cycle"
+            )
+
+        if PLOT_ASPERITY_PRESSURE_CYCLE:
+            plot_cycle_field(
+                res,
+                res["Pa_nd"],
+                title="Non-dimensional Asperity Pressure (Cam Cycle)",
+                ylabel="P_asp (p_asp / P0_ref)",
+                out_name="Graph_Asperity_Pressure_Cycle"
+            )
+
+        if PLOT_FILM_THICKNESS_CYCLE:
+            plot_cycle_field(
+                res,
+                res["H_nd"],
+                title="Non-dimensional Film Thickness (Cam Cycle)",
+                ylabel="H (h / R)",
+                out_name="Graph_Film_Thickness_Cycle"
+            )
+
+    # Cross-RPM overlay plots vs cam angle
+    if PLOT_HYDRO_FRICTION_VS_ANGLE:
+        plot_vs_angle(
+            all_results,
+            key="Fh",
+            ylabel="Hydrodynamic friction force Fh (N)",
+            title="Hydrodynamic Friction vs Cam Angle",
+            out_name="Graph_Hydrodynamic_Friction_vs_CamAngle.png"
+        )
+
+    if PLOT_ASP_FRICTION_VS_ANGLE:
+        plot_vs_angle(
+            all_results,
+            key="Fa",
+            ylabel="Asperity friction force Fa (N)",
+            title="Asperity Friction vs Cam Angle",
+            out_name="Graph_Asperity_Friction_vs_CamAngle.png"
+        )
+
+    if PLOT_TORQUE_VS_ANGLE:
+        plot_vs_angle(
+            all_results,
+            key="Tq",
+            ylabel="Friction torque (N·m)",
+            title="Friction Torque vs Cam Angle",
+            out_name="Graph_Friction_Torque_vs_CamAngle.png"
+        )
+
+    # Print average torque per RPM
+    print("\n===== Average Friction Torque Over Entire Cam Cycle =====")
+    for r in all_results:
+        print(f"RPM {r['rpm']}: Avg friction torque = {r['avg_torque']:.6e} N·m")
+
+    print("\nPlots generated (according to toggles).")
+
+
+if __name__ == "__main__":
+    main()
