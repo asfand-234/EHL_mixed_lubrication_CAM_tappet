@@ -5,8 +5,8 @@ The reynolds and asperity pressure profiles are not correctly shaped and not lyi
 
 HARD STRICT RULES:
 To complete below tasks you must remember:
-1) Do not implement any non-physical or artificial factor, scaling, clamp, clipping, constraints etc anywhere in the code. Every correction and optimization must be pure physics base as per standard EHL literature prove. 
-2)Do not change kinematics formulas
+1) Do not implement any non-physical or artificial factor, scaling, clamp, clipping, constraints etc anywhere in the code. Every correction and optimization must be pure physics base as per standard EHL literature prove.
+2) Do not change kinematics formulas
 3) Do not change material and roughness input parameter values 
 
 TASKS:
