@@ -88,6 +88,12 @@ class EHLSolver:
         # Adjust as needed for your boundary regime (typical range ~0.05–0.12)
         # ------------------------
         self.mu_b = 0.12
+        # ------------------------
+        # Limiting shear model (Eyring-like)
+        # tau_lim = tau0 + alpha_tau * p
+        # ------------------------
+        self.tau0 = 2.0e6
+        self.alpha_tau = 0.02
 
         # ------------------------
         # Internal state variables updated per step
@@ -664,23 +670,24 @@ class EHLSolver:
         p_asp = np.maximum(Pa_nd, 0.0) * self.P0_ref     # Pa
         h = np.maximum(H_nd * R_eff, 1e-9)               # m
 
-        # Pressure gradient dp/dx (Pa/m)
-        dpdx = np.gradient(p_rey, dx_m)
-
         # Local viscosity (Pa*s), using current thermal field
         mu = self.c_mu(P_rey_nd, self.T_current)
 
         # Flow factors (optional inclusion consistent with your Reynolds formulation)
-        phi_x, phi_s = self.calc_flow_factors(H_nd)
+        _, phi_s = self.calc_flow_factors(H_nd)
 
         # Shear components (Pa)
         tau_couette = mu * phi_s * (self.Vs / h)
-        tau_poiseuille = -0.5 * h * phi_x * dpdx
-        tau_h = tau_couette + tau_poiseuille
+        tau_raw = tau_couette
+
+        # Limiting shear stress (Eyring-like)
+        tau_lim = self.tau0 + self.alpha_tau * p_rey
+        tau_lim = np.maximum(tau_lim, 1.0)
+        tau_h = tau_lim * np.tanh(tau_raw / tau_lim)
 
         # Integrate friction forces (N)
-        Fh = self.B * np.trapz(np.abs(tau_h), x_m)
-        Fa = self.B * np.trapz(self.mu_b * p_asp, x_m)
+        Fh = self.B * np.abs(np.trapezoid(tau_h, x_m))
+        Fa = self.B * np.trapezoid(self.mu_b * p_asp, x_m)
 
         Ft = Fh + Fa
 
@@ -904,6 +911,14 @@ def main():
     for rpm in RPM_LIST:
         res = solver.run_cam_cycle(rpm, verbose=True)
         all_results.append(res)
+
+        print(f"\n===== Hydrodynamic Friction vs Cam Angle (RPM {rpm}) =====")
+        for theta, fh in zip(res["theta_deg"], res["Fh"]):
+            print(f"{theta:.3f}\t{fh:.6e}")
+
+        print(f"\n===== Asperity Friction vs Cam Angle (RPM {rpm}) =====")
+        for theta, fa in zip(res["theta_deg"], res["Fa"]):
+            print(f"{theta:.3f}\t{fa:.6e}")
 
         # Per-RPM plots
         if PLOT_CAM_KINEMATICS:
