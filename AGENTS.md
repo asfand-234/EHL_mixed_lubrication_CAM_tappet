@@ -2,14 +2,16 @@ Read and deeply analyze the entire code in "test6666.txt". It is 1D thermal Tran
 
 TESTING CRITERIA:
 1) Run the code for 300 rpm only, and print data for hydrodynamic friction vs cam angle and asperity friction vs cam angle. 
+**It will take about 210 seconds, So Be patience until complete**
 2) Then analyze why there are too much spikes/oscilations around nose region in hydrodynamic and asperity friction data. Then fix it . 
 3) Keep optimizing, and keep running and keep printing results untill below criteria 100% meet.
-4) Every correction must be purely physics base. Perform diagnostic tests to find root causes. also add limiting shear contribution in hydrodynamic friction and keep checking.
+4) Every correction must be purely physics base. Perform diagnostic tests to find root causes. also add limiting shear contribution in hydrodynamic friction.
 
 CRITERIA:
 1) Hydrodynamic friction must be maximum at both flanks and minumum around cam nose angles.
 2) Asperity friction must be maximum at nose angles and decreasing away from it like a belly shape.
 3) There must not be any oscilations or spikes throughout profile.
+4) total cycle runtime < 208 seconds
 
 Hard Strict Rules:
 1) Do not change kinematics formula
